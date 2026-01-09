@@ -111,9 +111,14 @@ const AssetCreator: React.FC = () => {
   }, [account, isConnected]);
 
   const handleGenerateAsset = async () => {
+    if (!isConnected) {
+      setMintStatus('Silakan connect wallet terlebih dahulu');
+      return;
+    }
     if (!prompt.trim() || !selectedCategory) return;
     setLoading(true);
     setImageLoading(true);
+    setMintStatus('');
     
     // Enhance prompt dengan konteks pranikah
     const enhancedPrompt = `${prompt}. Kategori: ${selectedCategoryData?.name}. Status kepemilikan: ${selectedOwnership?.name} dalam konteks perjanjian pranikah.`;
@@ -253,6 +258,19 @@ const AssetCreator: React.FC = () => {
       {!isMinted ? (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-start">
           
+          {/* Wallet Connection Warning */}
+          {!isConnected && (
+            <div className="lg:col-span-12 bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-center gap-3">
+              <div className="p-2 bg-amber-100 rounded-xl">
+                <ShieldCheckIcon className="h-5 w-5 text-amber-600" />
+              </div>
+              <div className="flex-1">
+                <p className="text-sm font-bold text-amber-800">Wallet Belum Terhubung</p>
+                <p className="text-xs text-amber-600">Silakan connect wallet terlebih dahulu untuk mendaftarkan aset ke blockchain.</p>
+              </div>
+            </div>
+          )}
+          
           <div className="lg:col-span-7 space-y-6">
             
             {/* Step 1: Pilih Kategori */}
@@ -360,11 +378,11 @@ const AssetCreator: React.FC = () => {
               
               <button 
                 onClick={handleGenerateAsset}
-                disabled={loading || !prompt.trim() || !selectedCategory}
+                disabled={loading || !prompt.trim() || !selectedCategory || !isConnected}
                 className="w-full py-4 bg-slate-900 text-white rounded-xl font-black text-[10px] uppercase tracking-[0.3em] hover:bg-black transition-all shadow-xl disabled:opacity-30 flex items-center justify-center gap-3"
               >
                 {loading ? <ArrowPathIcon className="h-5 w-5 animate-spin text-indigo-400" /> : <SparklesIcon className="h-5 w-5 text-indigo-400" />}
-                Generate Sertifikat Digital
+                {!isConnected ? 'Connect Wallet Dulu' : 'Generate Sertifikat Digital'}
               </button>
             </div>
 

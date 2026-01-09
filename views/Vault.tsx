@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useWeb3 } from '../contexts/Web3Context';
-import { assetNFTService } from '../services/web3Service';
+import { assetNFTService, web3Service } from '../services/web3Service';
 import { 
   ArrowDownLeftIcon, 
   LockClosedIcon,
@@ -25,7 +25,7 @@ import { VaultAsset } from '../types';
 
 interface VaultBalance {
   personal: { partnerA: number; partnerB: number };
-  shared: { total: number; partnerAContribution: number; partnerBContribution: number };
+  shared: { total: number; available: number; partnerAContribution: number; partnerBContribution: number };
   escrow: { total: number; locked: boolean };
 }
 
@@ -54,11 +54,11 @@ interface BlockchainAsset {
 }
 
 const Vault: React.FC = () => {
-  const { isConnected, account, shortenAddress } = useWeb3();
+  const { isConnected, account, shortenAddress, getVaultBalances, depositPersonal, transferToShared, getUserVows, getVow } = useWeb3();
   
   const [balance, setBalance] = useState<VaultBalance>({
     personal: { partnerA: 0, partnerB: 0 },
-    shared: { total: 0, partnerAContribution: 0, partnerBContribution: 0 },
+    shared: { total: 0, available: 0, partnerAContribution: 0, partnerBContribution: 0 },
     escrow: { total: 0, locked: false }
   });
   
@@ -67,6 +67,7 @@ const Vault: React.FC = () => {
   const [allAssets, setAllAssets] = useState<BlockchainAsset[]>([]);
   const [assetFilter, setAssetFilter] = useState<'all' | 'personal' | 'joint'>('all');
   const [loadingAssets, setLoadingAssets] = useState(false);
+  const [loadingBalance, setLoadingBalance] = useState(false);
   
   // Modal states
   const [showDepositModal, setShowDepositModal] = useState(false);
@@ -186,22 +187,76 @@ const Vault: React.FC = () => {
     }
   };
 
-  // Load data
-  useEffect(() => {
-    const savedBalance = localStorage.getItem('vault_balance');
-    if (savedBalance) {
-      setBalance(JSON.parse(savedBalance));
-    }
+  // Load vault balances from blockchain (synced with Dashboard)
+  const loadVaultBalances = async () => {
+    if (!account || !isConnected) return;
     
+    setLoadingBalance(true);
+    try {
+      console.log('=== VAULT: LOAD BALANCES FROM BLOCKCHAIN ===');
+      const balances = await getVaultBalances();
+      console.log('Vault balances from blockchain:', balances);
+      
+      const personalBalance = parseFloat(balances.personal);
+      const sharedTotal = parseFloat(balances.totalShared);
+      const myContribution = parseFloat(balances.sharedContribution);
+      
+      // Calculate escrow from active vows
+      let totalEscrow = 0;
+      try {
+        const vowIds = await getUserVows();
+        for (const vowId of vowIds) {
+          const vow = await getVow(vowId);
+          if (Number(vow.status) === 2) { // Active
+            const escrowWei = Number(vow.escrowBalance);
+            totalEscrow += escrowWei / 1e18;
+          }
+        }
+      } catch (e) {
+        console.error('Failed to calculate escrow:', e);
+      }
+      
+      console.log('Personal:', personalBalance);
+      console.log('Shared Total:', sharedTotal);
+      console.log('My Contribution:', myContribution);
+      console.log('Total Escrow:', totalEscrow);
+      
+      setBalance({
+        personal: { partnerA: personalBalance, partnerB: 0 },
+        shared: { 
+          total: sharedTotal + totalEscrow,
+          available: sharedTotal,
+          partnerAContribution: myContribution, 
+          partnerBContribution: sharedTotal - myContribution 
+        },
+        escrow: { total: totalEscrow, locked: totalEscrow > 0 }
+      });
+      
+      console.log('=== END VAULT BALANCES ===');
+    } catch (error) {
+      console.error('Failed to load vault balances:', error);
+      // Fallback to localStorage
+      const savedBalance = localStorage.getItem('vault_balance');
+      if (savedBalance) {
+        setBalance(JSON.parse(savedBalance));
+      }
+    } finally {
+      setLoadingBalance(false);
+    }
+  };
+
+  // Load data from localStorage (transactions only)
+  useEffect(() => {
     const savedTx = localStorage.getItem('vault_transactions');
     if (savedTx) {
       setTransactions(JSON.parse(savedTx));
     }
   }, []);
 
-  // Load assets when account changes
+  // Load balances and assets when account changes
   useEffect(() => {
     if (isConnected && account) {
+      loadVaultBalances();
       loadAssetsFromBlockchain();
     }
   }, [isConnected, account]);
@@ -217,31 +272,29 @@ const Vault: React.FC = () => {
   const personalAssetsCount = allAssets.filter((a: any) => a.ownership === 'Harta Pribadi').length;
   const jointAssetsCount = allAssets.filter((a: any) => a.ownership === 'Harta Bersama').length;
 
-  // Save to localStorage
-  const saveData = (newBalance: VaultBalance, newTx: Transaction[]) => {
-    localStorage.setItem('vault_balance', JSON.stringify(newBalance));
+  // Save transactions to localStorage
+  const saveTransactions = (newTx: Transaction[]) => {
     localStorage.setItem('vault_transactions', JSON.stringify(newTx));
   };
 
-  // Deposit to Personal Vault
-  const handleDeposit = () => {
+  // Deposit to Personal Vault (blockchain)
+  const handleDeposit = async () => {
     if (!depositAmount || parseFloat(depositAmount) <= 0) {
       setError('Masukkan jumlah yang valid');
       return;
     }
 
     setLoading(true);
+    setError(null);
     
-    setTimeout(() => {
+    try {
       const amount = parseFloat(depositAmount);
-      const newBalance = {
-        ...balance,
-        personal: {
-          ...balance.personal,
-          partnerA: balance.personal.partnerA + amount
-        }
-      };
       
+      // Deposit to blockchain
+      const txHash = await depositPersonal(depositAmount);
+      console.log('Deposit tx:', txHash);
+      
+      // Add transaction to history
       const newTx: Transaction = {
         id: `tx_${Date.now()}`,
         type: 'deposit_personal',
@@ -252,20 +305,25 @@ const Vault: React.FC = () => {
       };
       
       const newTransactions = [newTx, ...transactions];
-      
-      setBalance(newBalance);
       setTransactions(newTransactions);
-      saveData(newBalance, newTransactions);
+      saveTransactions(newTransactions);
       
       setSuccess(`Berhasil deposit ${amount} ETH ke Brankas Pribadi`);
       setShowDepositModal(false);
       setDepositAmount('');
+      
+      // Reload balances from blockchain
+      await loadVaultBalances();
+    } catch (err: any) {
+      console.error('Deposit error:', err);
+      setError(err.message || 'Gagal deposit ke brankas');
+    } finally {
       setLoading(false);
-    }, 1000);
+    }
   };
 
-  // Transfer from Personal to Shared Vault
-  const handleTransferToShared = () => {
+  // Transfer from Personal to Shared Vault (blockchain)
+  const handleTransferToShared = async () => {
     if (!transferAmount || parseFloat(transferAmount) <= 0) {
       setError('Masukkan jumlah yang valid');
       return;
@@ -278,21 +336,14 @@ const Vault: React.FC = () => {
     }
 
     setLoading(true);
+    setError(null);
     
-    setTimeout(() => {
-      const newBalance = {
-        ...balance,
-        personal: {
-          ...balance.personal,
-          partnerA: balance.personal.partnerA - amount
-        },
-        shared: {
-          total: balance.shared.total + amount,
-          partnerAContribution: balance.shared.partnerAContribution + amount,
-          partnerBContribution: balance.shared.partnerBContribution
-        }
-      };
+    try {
+      // Transfer to shared vault on blockchain
+      const txHash = await transferToShared(transferAmount);
+      console.log('Transfer tx:', txHash);
       
+      // Add transaction to history
       const newTx: Transaction = {
         id: `tx_${Date.now()}`,
         type: 'transfer_to_shared',
@@ -303,16 +354,21 @@ const Vault: React.FC = () => {
       };
       
       const newTransactions = [newTx, ...transactions];
-      
-      setBalance(newBalance);
       setTransactions(newTransactions);
-      saveData(newBalance, newTransactions);
+      saveTransactions(newTransactions);
       
       setSuccess(`Berhasil transfer ${amount} ETH ke Brankas Bersama`);
       setShowTransferModal(false);
       setTransferAmount('');
+      
+      // Reload balances from blockchain
+      await loadVaultBalances();
+    } catch (err: any) {
+      console.error('Transfer error:', err);
+      setError(err.message || 'Gagal transfer ke brankas bersama');
+    } finally {
       setLoading(false);
-    }, 1000);
+    }
   };
 
   const escrowAvailable = balance.shared.total - balance.escrow.total;
@@ -332,6 +388,14 @@ const Vault: React.FC = () => {
             <p className="text-slate-500 text-sm mt-1">Kelola aset pribadi dan bersama dengan aman</p>
           </div>
           <div className="flex gap-2">
+            <button 
+              onClick={() => { loadVaultBalances(); loadAssetsFromBlockchain(); }}
+              disabled={loadingBalance || loadingAssets}
+              className="px-4 py-2 bg-slate-100 text-slate-600 rounded-xl text-sm font-bold hover:bg-slate-200 transition-all flex items-center gap-2 disabled:opacity-50"
+            >
+              <ArrowPathIcon className={`h-4 w-4 ${loadingBalance || loadingAssets ? 'animate-spin' : ''}`} />
+              {loadingBalance ? 'Memuat...' : 'Refresh'}
+            </button>
             <button 
               onClick={() => setShowDepositModal(true)}
               className="px-4 py-2 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-xl text-sm font-bold shadow-lg hover:shadow-xl transition-all flex items-center gap-2"
@@ -420,7 +484,14 @@ const Vault: React.FC = () => {
                 </div>
                 <div>
                   <p className="text-xs text-slate-400 font-medium">Brankas Pribadi</p>
-                  <p className="text-2xl font-bold text-slate-900">{balance.personal.partnerA.toFixed(4)} <span className="text-sm text-slate-400">ETH</span></p>
+                  {loadingBalance ? (
+                    <div className="flex items-center gap-2">
+                      <ArrowPathIcon className="h-4 w-4 text-slate-400 animate-spin" />
+                      <span className="text-sm text-slate-400">Memuat...</span>
+                    </div>
+                  ) : (
+                    <p className="text-2xl font-bold text-slate-900">{balance.personal.partnerA.toFixed(4)} <span className="text-sm text-slate-400">ETH</span></p>
+                  )}
                 </div>
               </div>
             </div>
@@ -462,14 +533,16 @@ const Vault: React.FC = () => {
                 </div>
                 <div>
                   <p className="text-xs text-slate-400 font-medium">Brankas Bersama</p>
-                  <p className="text-2xl font-bold text-slate-900">{balance.shared.total.toFixed(4)} <span className="text-sm text-slate-400">ETH</span></p>
+                  {loadingBalance ? (
+                    <div className="flex items-center gap-2">
+                      <ArrowPathIcon className="h-4 w-4 text-slate-400 animate-spin" />
+                      <span className="text-sm text-slate-400">Memuat...</span>
+                    </div>
+                  ) : (
+                    <p className="text-2xl font-bold text-slate-900">{balance.shared.total.toFixed(4)} <span className="text-sm text-slate-400">ETH</span></p>
+                  )}
                 </div>
               </div>
-              {jointAssetsCount > 0 && (
-                <span className="text-[9px] bg-rose-100 text-rose-700 px-2 py-1 rounded-full font-bold">
-                  {jointAssetsCount} Aset
-                </span>
-              )}
             </div>
             
             {/* Contribution Bar */}
@@ -496,30 +569,6 @@ const Vault: React.FC = () => {
                 <span className="text-sm font-bold text-rose-600">{balance.shared.partnerBContribution.toFixed(4)} ETH</span>
               </div>
             </div>
-
-            {/* Joint Assets Preview */}
-            {jointAssetsCount > 0 && (
-              <div className="mb-4">
-                <p className="text-[10px] font-bold text-slate-400 uppercase mb-2">Aset Harta Bersama</p>
-                <div className="space-y-2 max-h-32 overflow-y-auto">
-                  {allAssets
-                    .filter(a => a.ownership === 'Harta Bersama')
-                    .slice(0, 3)
-                    .map(asset => (
-                      <div key={asset.tokenId} className="flex items-center gap-2 p-2 bg-rose-50/50 rounded-lg">
-                        <span className="text-sm">{asset.assetClass === 'Properti' ? '🏠' : asset.assetClass === 'Kendaraan' ? '🚗' : asset.assetClass === 'Investasi' ? '📈' : '💎'}</span>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-[10px] font-bold text-slate-700 truncate">{asset.name}</p>
-                          <p className="text-[9px] text-slate-400">#{asset.tokenId} {asset.isPartnerAsset ? '• Aset Pasangan' : ''}</p>
-                        </div>
-                      </div>
-                    ))}
-                  {jointAssetsCount > 3 && (
-                    <p className="text-[9px] text-center text-slate-400">+{jointAssetsCount - 3} aset lainnya</p>
-                  )}
-                </div>
-              </div>
-            )}
             
             <div className="p-3 bg-purple-50 rounded-xl border border-purple-100">
               <p className="text-[10px] text-purple-700 font-medium">
