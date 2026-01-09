@@ -1,0 +1,8 @@
+
+{
+  "name": "SmartVow | Secure Marriage Protocol on Base",
+  "description": "SmartVow is an onchain marriage agreement platform built on Base. It features AI-powered legal mediation, smart prenup generation, and automated asset protection using IDRX escrow vaults.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
