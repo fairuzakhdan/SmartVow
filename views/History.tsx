@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useWeb3 } from '../contexts/Web3Context';
-import { assetNFTService } from '../services/web3Service';
+import { assetNFTService, certificateNFTService } from '../services/web3Service';
 import { 
   ArrowUpRightIcon, 
   ArrowDownLeftIcon, 
@@ -39,6 +39,7 @@ const History: React.FC = () => {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [filter, setFilter] = useState<'all' | 'vault' | 'nft' | 'agreement'>('all');
   const [loadingBlockchain, setLoadingBlockchain] = useState(false);
+  const [hasRegisteredPartner, setHasRegisteredPartner] = useState(false);
 
   // Fetch metadata from IPFS to get ownership info (same as Vault.tsx)
   const fetchMetadataFromIPFS = async (metadataURI: string): Promise<{ ownership?: string; category?: string } | null> => {
@@ -65,7 +66,7 @@ const History: React.FC = () => {
   };
 
   // Load NFT assets from blockchain (synced with Vault.tsx)
-  const loadNFTsFromBlockchain = async (): Promise<Transaction[]> => {
+  const loadNFTsFromBlockchain = async (hasPartner: boolean): Promise<Transaction[]> => {
     if (!account || !isConnected) return [];
     
     try {
@@ -96,6 +97,11 @@ const History: React.FC = () => {
           
           // Check if this is partner's asset
           const isPartnerAsset = assetData.creator.toLowerCase() !== account.toLowerCase();
+          
+          // Skip aset bersama jika tidak punya pasangan aktif
+          if (!hasPartner && (ownership === 'Harta Bersama' || isPartnerAsset)) {
+            continue;
+          }
           
           let category = localData?.category;
           
@@ -134,20 +140,59 @@ const History: React.FC = () => {
   const loadTransactions = async () => {
     setLoadingBlockchain(true);
     
+    // Check if user has registered partner from Marriage Certificate
+    let hasPartner = false;
+    if (isConnected && account) {
+      try {
+        // Check localStorage first (faster)
+        const storedCerts = localStorage.getItem('smartvow_certificates');
+        if (storedCerts) {
+          const certificates = JSON.parse(storedCerts);
+          for (const cert of certificates) {
+            if (cert.partnerA?.address?.toLowerCase() === account.toLowerCase() ||
+                cert.partnerB?.address?.toLowerCase() === account.toLowerCase()) {
+              hasPartner = true;
+              break;
+            }
+          }
+        }
+        
+        // Also check blockchain for certificate
+        if (!hasPartner) {
+          await certificateNFTService.connect();
+          const certificateIds = await certificateNFTService.getUserCertificates(account);
+          if (certificateIds.length > 0) {
+            hasPartner = true;
+          }
+        }
+      } catch (e) {
+        console.error('Failed to check certificates:', e);
+      }
+    }
+    setHasRegisteredPartner(hasPartner);
+    
     // Load vault transactions from localStorage
     const vaultTx = JSON.parse(localStorage.getItem('vault_transactions') || '[]');
     
     // Load NFT minting history from blockchain (synced with Vault)
     let nftTx: Transaction[] = [];
     if (isConnected && account) {
-      nftTx = await loadNFTsFromBlockchain();
+      nftTx = await loadNFTsFromBlockchain(hasPartner);
     } else {
       // Fallback to localStorage if not connected
       const nftAssets = JSON.parse(localStorage.getItem('chainvow_assets') || '[]');
-      nftTx = nftAssets.map((asset: any) => ({
-        id: `nft_${asset.tokenId}`,
-        type: 'nft_mint' as TransactionType,
-        from: asset.name,
+      nftTx = nftAssets
+        .filter((asset: any) => {
+          // Filter out joint assets if no registered partner
+          if (!hasPartner && (asset.ownership === 'Harta Bersama' || asset.ownershipType === 1)) {
+            return false;
+          }
+          return true;
+        })
+        .map((asset: any) => ({
+          id: `nft_${asset.tokenId}`,
+          type: 'nft_mint' as TransactionType,
+          from: asset.name,
         date: asset.date ? new Date(asset.date).toISOString() : new Date().toISOString(),
         status: 'confirmed' as const,
         txHash: asset.txHash,

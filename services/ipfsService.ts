@@ -6,17 +6,71 @@ const PINATA_JWT = import.meta.env.VITE_PINATA_JWT || '';
 
 /**
  * Convert base64 data URL to Blob
+ * Supports both base64 and SVG data URLs
  */
 const dataURLtoBlob = (dataURL: string): Blob => {
-  const arr = dataURL.split(',');
-  const mime = arr[0].match(/:(.*?);/)?.[1] || 'image/png';
-  const bstr = atob(arr[1]);
-  let n = bstr.length;
-  const u8arr = new Uint8Array(n);
-  while (n--) {
-    u8arr[n] = bstr.charCodeAt(n);
+  // Handle SVG data URL (URL encoded, not base64)
+  if (dataURL.startsWith('data:image/svg+xml,')) {
+    const svgContent = decodeURIComponent(dataURL.replace('data:image/svg+xml,', ''));
+    return new Blob([svgContent], { type: 'image/svg+xml' });
   }
-  return new Blob([u8arr], { type: mime });
+  
+  // Handle SVG data URL (base64 encoded)
+  if (dataURL.startsWith('data:image/svg+xml;base64,')) {
+    const base64Data = dataURL.replace('data:image/svg+xml;base64,', '');
+    try {
+      const svgContent = atob(base64Data);
+      return new Blob([svgContent], { type: 'image/svg+xml' });
+    } catch (e) {
+      console.error('Failed to decode SVG base64:', e);
+      throw new Error('Invalid SVG format');
+    }
+  }
+  
+  // Handle regular base64 data URL (png, jpeg, etc)
+  const arr = dataURL.split(',');
+  const mimeMatch = arr[0].match(/:(.*?);/);
+  const mime = mimeMatch ? mimeMatch[1] : 'image/png';
+  
+  // Check if it's actually base64
+  if (!arr[0].includes('base64')) {
+    // Not base64 - might be URL encoded or plain text
+    try {
+      const decoded = decodeURIComponent(arr[1] || '');
+      return new Blob([decoded], { type: mime });
+    } catch {
+      return new Blob([arr[1] || ''], { type: mime });
+    }
+  }
+  
+  // Validate base64 string before decoding
+  const base64Data = arr[1];
+  if (!base64Data || base64Data.trim() === '') {
+    throw new Error('Empty base64 data');
+  }
+  
+  // Clean up base64 string (remove whitespace, newlines)
+  const cleanBase64 = base64Data.replace(/\s/g, '');
+  
+  // Validate base64 characters
+  const base64Regex = /^[A-Za-z0-9+/]*={0,2}$/;
+  if (!base64Regex.test(cleanBase64)) {
+    console.error('Invalid base64 characters detected');
+    throw new Error('Invalid image format. The image data is corrupted.');
+  }
+  
+  try {
+    const bstr = atob(cleanBase64);
+    let n = bstr.length;
+    const u8arr = new Uint8Array(n);
+    while (n--) {
+      u8arr[n] = bstr.charCodeAt(n);
+    }
+    return new Blob([u8arr], { type: mime });
+  } catch (e) {
+    console.error('Failed to decode base64:', e);
+    throw new Error('Invalid image format. Please try generating a new image.');
+  }
 };
 
 /**

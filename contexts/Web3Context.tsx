@@ -34,6 +34,9 @@ interface Web3ContextType {
   transferToShared: (amount: string) => Promise<string>;
   withdrawPersonal: (amount: string) => Promise<string>;
   getVaultBalances: () => Promise<{ personal: string; sharedContribution: string; totalShared: string }>;
+  getCoupleSharedVault: () => Promise<{ userContribution: string; partnerContribution: string; coupleTotal: string; partnerAddress: string; isMutualRegistered: boolean }>;
+  getMyPartner: () => Promise<string>;
+  amIMutualRegistered: () => Promise<boolean>;
   
   // Claim functions
   submitInternalClaim: (vowId: number, penaltyPercentage: number) => Promise<string>;
@@ -72,15 +75,51 @@ export const Web3Provider: React.FC<{ children: ReactNode }> = ({ children }) =>
     checkConnection();
   }, []);
 
+  // Helper function to clear user-specific cache
+  const clearUserCache = useCallback(() => {
+    console.log('Clearing user cache...');
+    // Clear all user-specific localStorage data
+    const keysToRemove = [
+      'smartvow_certificates',
+      'smartvow_agreements', 
+      'smartvow_claims',
+      'smartvow_assets',
+      'chainvow_assets',
+      'vault_balance',
+      'vault_transactions'
+    ];
+    
+    keysToRemove.forEach(key => {
+      localStorage.removeItem(key);
+    });
+    
+    // Clear linked_partner keys (per-account)
+    const allKeys = Object.keys(localStorage);
+    allKeys.forEach(key => {
+      if (key.startsWith('linked_partner_')) {
+        localStorage.removeItem(key);
+      }
+    });
+    
+    console.log('User cache cleared');
+  }, []);
+
   // Listen for account changes
   useEffect(() => {
     if (!web3Service.isWalletAvailable()) return;
 
     const handleAccountsChanged = (accounts: string[]) => {
       if (accounts.length === 0) {
+        // Wallet disconnected - clear all cache
         setIsConnected(false);
         setAccount(null);
         localStorage.removeItem('walletConnected');
+        clearUserCache();
+      } else if (account && accounts[0].toLowerCase() !== account.toLowerCase()) {
+        // Account changed - clear cache for old account
+        console.log('Account changed from', account, 'to', accounts[0]);
+        clearUserCache();
+        setAccount(accounts[0]);
       } else {
         setAccount(accounts[0]);
       }
@@ -88,7 +127,7 @@ export const Web3Provider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     window.ethereum?.on('accountsChanged', handleAccountsChanged);
     return () => window.ethereum?.removeListener('accountsChanged', handleAccountsChanged);
-  }, []);
+  }, [account, clearUserCache]);
 
 
   const connectWallet = useCallback(async () => {

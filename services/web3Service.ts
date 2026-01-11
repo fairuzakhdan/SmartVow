@@ -1,6 +1,6 @@
 import { ethers } from 'ethers';
 
-// SmartVow Contract ABI (sesuai dengan SmartVow.sol)
+// SmartVow Contract ABI (V3 - Brankas Bersama Per Certificate)
 export const SMARTVOW_ABI = [
   // Events
   "event VowCreated(uint256 indexed vowId, address indexed partnerA, address indexed partnerB)",
@@ -11,6 +11,12 @@ export const SMARTVOW_ABI = [
   "event BreachReported(uint256 indexed vowId, uint256 conditionId, address reporter)",
   "event VowResolved(uint256 indexed vowId, address beneficiary, uint256 amount)",
   "event VowTerminated(uint256 indexed vowId)",
+  "event PersonalDeposit(address indexed user, uint256 amount)",
+  "event SharedDeposit(uint256 indexed certificateId, address indexed user, uint256 amount)",
+  "event PersonalWithdraw(address indexed user, uint256 amount)",
+  "event CertificateRegistered(uint256 indexed certificateId, address indexed partnerA, address indexed partnerB)",
+  "event ClaimSubmitted(uint256 indexed vowId, address indexed claimant, string claimType)",
+  "event ClaimApproved(uint256 indexed vowId, address indexed claimant, uint256 amount)",
 
   // Read Functions
   "function vowCounter() view returns (uint256)",
@@ -20,38 +26,51 @@ export const SMARTVOW_ABI = [
   "function getUserVows(address _user) view returns (uint256[])",
   "function getConditionCount(uint256 _vowId) view returns (uint256)",
 
+  // Certificate Registration Functions
+  "function registerCertificate(uint256 _certificateId, address _partnerA, address _partnerB)",
+  "function isCertificatePartner(uint256 _certId, address _user) view returns (bool)",
+  "function getMyCertificates() view returns (uint256[])",
+  "function getCertificatePartners(uint256 _certId) view returns (address partnerA, address partnerB)",
+  "function certificateActive(uint256 _certId) view returns (bool)",
+  "function certificatePartnerA(uint256 _certId) view returns (address)",
+  "function certificatePartnerB(uint256 _certId) view returns (address)",
+
   // Write Functions
   "function createVow(address _partnerB, string _metadataURI) returns (uint256)",
-  "function createVowComplete(address _partnerB, string _metadataURI, uint8[] _conditionTypes, string[] _descriptions, uint256[] _penaltyPercentages) returns (uint256)",
-  "function createVowAndLockEscrow(address _partnerB, string _metadataURI, uint8[] _conditionTypes, string[] _descriptions, uint256[] _penaltyPercentages, uint256 _escrowAmount) returns (uint256)",
+  "function createVowWithCertificateEscrow(address _partnerB, string _metadataURI, uint8[] _conditionTypes, string[] _descriptions, uint256[] _penaltyPercentages, uint256 _escrowAmount, uint256 _certificateId) returns (uint256)",
   "function addCondition(uint256 _vowId, uint8 _conditionType, string _description, uint256 _penaltyPercentage)",
   "function signVow(uint256 _vowId)",
+  "function signAndActivateWithCertificate(uint256 _vowId, uint256 _certificateId)",
   "function depositAndActivate(uint256 _vowId) payable",
-  "function activateWithSharedVault(uint256 _vowId, uint256 _escrowAmount)",
-  "function signAndActivate(uint256 _vowId, uint256 _escrowAmount)",
-  "function signAndActivateOnly(uint256 _vowId)",
-  "function signAndActivateOnly(uint256 _vowId)",
+  "function activateWithCertificateVault(uint256 _vowId, uint256 _certificateId, uint256 _escrowAmount)",
   "function addEscrow(uint256 _vowId) payable",
   "function reportBreach(uint256 _vowId, uint256 _conditionIndex)",
   "function resolveDispute(uint256 _vowId, address _beneficiary, uint256 _percentage)",
   "function terminateVow(uint256 _vowId)",
   "function setMediator(address _newMediator)",
 
-  // Brankas Functions
+  // Brankas Pribadi Functions
   "function depositPersonal() payable",
-  "function transferToShared(uint256 _amount)",
   "function withdrawPersonal(uint256 _amount)",
-  "function getVaultBalances(address _user) view returns (uint256 personal, uint256 sharedContribution, uint256 totalShared)",
-  "function personalVault(address _user) view returns (uint256)",
-  "function sharedVaultContribution(address _user) view returns (uint256)",
-  "function totalSharedVault() view returns (uint256)",
+  "function getMyPersonalVault() view returns (uint256)",
+
+  // Brankas Bersama Functions (Per Certificate - PRIVATE)
+  "function transferToSharedVault(uint256 _certificateId, uint256 _amount)",
+  "function depositToSharedVault(uint256 _certificateId) payable",
+  "function getSharedVaultInfo(uint256 _certificateId) view returns (uint256 totalBalance, uint256 myContribution, uint256 partnerContribution, address partnerA, address partnerB)",
+  "function getSharedVaultBalance(uint256 _certificateId) view returns (uint256)",
+  "function getMySharedContribution(uint256 _certificateId) view returns (uint256)",
+  "function getAllMySharedVaults() view returns (uint256[] certificateIds, uint256[] balances, uint256[] myContributions)",
+  "function getMyVaultSummary() view returns (uint256 personalBalance, uint256 totalSharedBalance, uint256 certificateCount)",
 
   // Claim Functions
   "function submitInternalClaim(uint256 _vowId, uint256 _penaltyPercentage)",
   "function submitAIClaim(uint256 _vowId, string _reason, string _evidence, uint256 _timestamp)",
+  "function approveClaim(uint256 _vowId)",
   "function approveAIClaim(uint256 _vowId)",
   "function vowClaimed(uint256 _vowId) view returns (bool)",
-  "function claimant(uint256 _vowId) view returns (address)"
+  "function claimant(uint256 _vowId) view returns (address)",
+  "function claimPercentage(uint256 _vowId) view returns (uint256)"
 ] as const;
 
 // Contract Address - ganti dengan address setelah deploy
@@ -264,26 +283,76 @@ class Web3Service {
   }
 
   // Create vow + lock escrow dalam 1 transaksi (untuk Partner A)
+  // V3: Menggunakan createVowWithCertificateEscrow yang membutuhkan certificateId
   async createVowAndLockEscrow(
     partnerB: string,
     metadataURI: string,
     conditionTypes: number[],
     descriptions: string[],
     penaltyPercentages: number[],
-    escrowAmountInEth: string
+    escrowAmountInEth: string,
+    certificateId?: number
   ): Promise<{ vowId: number; txHash: string }> {
     const contract = this.getContract();
     const escrowWei = ethers.parseEther(escrowAmountInEth);
     
-    const tx = await contract.createVowAndLockEscrow(
+    console.log('=== CREATE VOW WITH CERTIFICATE ESCROW ===');
+    console.log('Partner B:', partnerB);
+    console.log('Escrow:', escrowAmountInEth, 'ETH');
+    
+    // Get certificate ID if not provided
+    let certId = certificateId;
+    if (!certId) {
+      const myCerts = await this.getMyCertificates();
+      console.log('My certificates:', myCerts);
+      
+      if (myCerts.length === 0) {
+        throw new Error('Anda belum memiliki sertifikat pernikahan. Silakan mint Marriage Certificate terlebih dahulu.');
+      }
+      
+      // Find certificate with this partner
+      for (const cid of myCerts) {
+        const isPartner = await contract.isCertificatePartner(cid, partnerB);
+        if (isPartner) {
+          certId = cid;
+          break;
+        }
+      }
+      
+      if (!certId) {
+        // Use latest certificate
+        certId = myCerts[myCerts.length - 1];
+      }
+    }
+    
+    console.log('Using certificate ID:', certId);
+    
+    // Check shared vault balance
+    try {
+      const sharedBalance = await contract.getSharedVaultBalance(certId);
+      console.log('Shared vault balance:', ethers.formatEther(sharedBalance), 'ETH');
+      
+      if (sharedBalance < escrowWei) {
+        throw new Error(`Saldo brankas bersama tidak cukup. Saldo: ${ethers.formatEther(sharedBalance)} ETH, Dibutuhkan: ${escrowAmountInEth} ETH`);
+      }
+    } catch (e: any) {
+      if (e.message.includes('Saldo brankas')) throw e;
+      console.log('Could not check shared vault balance:', e.message);
+    }
+    
+    const tx = await contract.createVowWithCertificateEscrow(
       partnerB,
       metadataURI,
       conditionTypes,
       descriptions,
       penaltyPercentages,
-      escrowWei
+      escrowWei,
+      certId
     );
+    
+    console.log('Transaction sent:', tx.hash);
     const receipt = await tx.wait();
+    console.log('Transaction confirmed');
     
     // Parse event to get vowId
     const event = receipt.logs.find((log: any) => {
@@ -295,6 +364,9 @@ class Web3Service {
 
     const parsedEvent = contract.interface.parseLog(event);
     const vowId = Number(parsedEvent?.args[0] || 0);
+    
+    console.log('Vow ID:', vowId);
+    console.log('=== END CREATE VOW ===');
 
     return { vowId, txHash: receipt.hash };
   }
@@ -327,35 +399,89 @@ class Web3Service {
     return receipt.hash;
   }
 
-  async activateWithSharedVault(vowId: number, escrowAmountInEth: string): Promise<string> {
+  // V3: Aktivasi dengan dana dari certificate shared vault
+  async activateWithSharedVault(vowId: number, escrowAmountInEth: string, certificateId?: number): Promise<string> {
     const contract = this.getContract();
     const escrowWei = ethers.parseEther(escrowAmountInEth);
-    const tx = await contract.activateWithSharedVault(vowId, escrowWei);
-    const receipt = await tx.wait();
-    return receipt.hash;
-  }
-
-  async signAndActivate(vowId: number, escrowAmountInEth: string): Promise<string> {
-    const contract = this.getContract();
-    const escrowWei = ethers.parseEther(escrowAmountInEth);
-    const tx = await contract.signAndActivate(vowId, escrowWei);
-    const receipt = await tx.wait();
-    return receipt.hash;
-  }
-
-  // Sign + Activate TANPA escrow (escrow sudah di-lock oleh Partner A)
-  // Hanya butuh gas fee
-  async signAndActivateOnly(vowId: number): Promise<string> {
-    const contract = this.getContract();
-    console.log('=== SIGN AND ACTIVATE ONLY ===');
-    console.log('Vow ID:', vowId);
-    console.log('This function ONLY needs gas fee, NO escrow needed');
     
-    const tx = await contract.signAndActivateOnly(vowId);
+    console.log('=== ACTIVATE WITH CERTIFICATE VAULT ===');
+    
+    // Get certificate ID if not provided
+    let certId = certificateId;
+    if (!certId) {
+      const myCerts = await this.getMyCertificates();
+      if (myCerts.length === 0) {
+        throw new Error('Anda belum memiliki sertifikat pernikahan.');
+      }
+      certId = myCerts[myCerts.length - 1];
+    }
+    
+    console.log('Certificate ID:', certId);
+    console.log('Escrow:', escrowAmountInEth, 'ETH');
+    
+    const tx = await contract.activateWithCertificateVault(vowId, certId, escrowWei);
+    const receipt = await tx.wait();
+    
+    console.log('=== END ACTIVATE ===');
+    return receipt.hash;
+  }
+
+  // V3: Sign and activate - simplified version
+  async signAndActivate(vowId: number, escrowAmountInEth: string, certificateId?: number): Promise<string> {
+    const contract = this.getContract();
+    
+    console.log('=== SIGN AND ACTIVATE ===');
+    
+    // First sign the vow
+    await this.signVow(vowId);
+    
+    // Then activate with certificate vault
+    return this.activateWithSharedVault(vowId, escrowAmountInEth, certificateId);
+  }
+
+  // V3: Sign + Activate untuk Partner B dalam 1 TRANSAKSI
+  // Menggunakan fungsi signAndActivateWithCertificate di contract
+  async signAndActivateOnly(vowId: number, certificateId?: number): Promise<string> {
+    const contract = this.getContract();
+    console.log('=== SIGN AND ACTIVATE ONLY (1 TX) ===');
+    console.log('Vow ID:', vowId);
+    
+    // Get vow details
+    const vow = await this.getVow(vowId);
+    console.log('Pending escrow:', ethers.formatEther(vow.pendingEscrowAmount), 'ETH');
+    
+    // Get certificate ID
+    let certId = certificateId;
+    if (!certId) {
+      const myCerts = await this.getMyCertificates();
+      if (myCerts.length === 0) {
+        throw new Error('Anda belum memiliki sertifikat pernikahan.');
+      }
+      
+      // Find certificate with both partners
+      for (const cid of myCerts) {
+        const isPartnerA = await contract.isCertificatePartner(cid, vow.partnerA);
+        const isPartnerB = await contract.isCertificatePartner(cid, vow.partnerB);
+        if (isPartnerA && isPartnerB) {
+          certId = cid;
+          break;
+        }
+      }
+      
+      if (!certId) {
+        certId = myCerts[myCerts.length - 1];
+      }
+    }
+    
+    console.log('Certificate ID:', certId);
+    
+    // 1 TRANSAKSI: Sign + Activate sekaligus
+    const tx = await contract.signAndActivateWithCertificate(vowId, certId);
     console.log('Transaction sent:', tx.hash);
     const receipt = await tx.wait();
-    console.log('Transaction confirmed');
+    console.log('Vow signed and activated in 1 transaction');
     console.log('=== END SIGN AND ACTIVATE ONLY ===');
+    
     return receipt.hash;
   }
 
@@ -416,31 +542,82 @@ class Web3Service {
     }
   }
 
-  async transferToShared(amountInEth: string): Promise<string> {
+  // ============ Certificate-based Functions (V3) ============
+
+  /**
+   * Get my certificates dari SmartVow
+   */
+  async getMyCertificates(): Promise<number[]> {
+    const contract = this.getContract();
+    const ids = await contract.getMyCertificates();
+    return ids.map((id: bigint) => Number(id));
+  }
+
+  /**
+   * Check if certificate is active
+   */
+  async isCertificateActive(certId: number): Promise<boolean> {
+    const contract = this.getContract();
+    return await contract.certificateActive(certId);
+  }
+
+  /**
+   * Check if user is partner in certificate
+   */
+  async isCertificatePartner(certId: number, userAddress: string): Promise<boolean> {
+    const contract = this.getContract();
+    return await contract.isCertificatePartner(certId, userAddress);
+  }
+
+  /**
+   * Transfer dari brankas pribadi ke brankas bersama certificate
+   * @param certificateId ID sertifikat
+   * @param amountInEth Jumlah ETH
+   */
+  async transferToShared(amountInEth: string, certificateId?: number): Promise<string> {
     const contract = this.getContract();
     const amountWei = ethers.parseEther(amountInEth);
     
-    console.log('=== TRANSFER TO SHARED ===');
-    console.log('Contract address:', contract.target);
+    console.log('=== TRANSFER TO SHARED VAULT ===');
     console.log('Amount:', amountInEth, 'ETH');
-    console.log('Amount (wei):', amountWei.toString());
     
-    // Check current balance first
-    const signer = await this.provider?.getSigner();
-    const userAddress = await signer?.getAddress();
-    console.log('User address:', userAddress);
+    // Get user's certificates
+    const myCerts = await this.getMyCertificates();
+    console.log('My certificates:', myCerts);
     
-    if (userAddress) {
-      const currentBalance = await contract.personalVault(userAddress);
-      console.log('Current personal vault balance (wei):', currentBalance.toString());
-      console.log('Current personal vault balance (ETH):', ethers.formatEther(currentBalance));
+    if (myCerts.length === 0) {
+      throw new Error('Anda belum memiliki sertifikat pernikahan. Silakan mint Marriage Certificate terlebih dahulu.');
     }
     
-    const tx = await contract.transferToShared(amountWei);
+    // Use provided certificateId or the latest one
+    const certId = certificateId ?? myCerts[myCerts.length - 1];
+    console.log('Using certificate ID:', certId);
+    
+    // Check personal vault balance
+    const personalBalance = await contract.getMyPersonalVault();
+    console.log('Personal vault balance:', ethers.formatEther(personalBalance), 'ETH');
+    
+    if (personalBalance < amountWei) {
+      throw new Error(`Saldo brankas pribadi tidak cukup. Saldo: ${ethers.formatEther(personalBalance)} ETH`);
+    }
+    
+    const tx = await contract.transferToSharedVault(certId, amountWei);
     console.log('Transaction sent:', tx.hash);
     const receipt = await tx.wait();
     console.log('Transaction confirmed');
     console.log('=== END TRANSFER TO SHARED ===');
+    return receipt.hash;
+  }
+
+  /**
+   * Deposit langsung ke brankas bersama certificate
+   */
+  async depositToSharedVault(certificateId: number, amountInEth: string): Promise<string> {
+    const contract = this.getContract();
+    const tx = await contract.depositToSharedVault(certificateId, {
+      value: ethers.parseEther(amountInEth)
+    });
+    const receipt = await tx.wait();
     return receipt.hash;
   }
 
@@ -451,56 +628,243 @@ class Web3Service {
     return receipt.hash;
   }
 
-  async getVaultBalances(address: string): Promise<{
+  async getVaultBalances(): Promise<{
     personal: string;
     sharedContribution: string;
     totalShared: string;
   }> {
     const contract = this.getContract();
-    console.log('=== GET VAULT BALANCES ===');
+    console.log('=== GET MY VAULT BALANCES ===');
     console.log('Contract address:', contract.target);
-    console.log('User address:', address);
     
-    const [personal, sharedContribution, totalShared] = await contract.getVaultBalances(address);
+    // Menggunakan getMyVaultSummary dari SmartVow V3
+    const [personalBalance, totalSharedBalance, certificateCount] = await contract.getMyVaultSummary();
+    
+    // Get my contribution dari semua shared vaults
+    let totalMyContribution = 0n;
+    if (certificateCount > 0) {
+      const [certIds, , myContributions] = await contract.getAllMySharedVaults();
+      for (let i = 0; i < myContributions.length; i++) {
+        totalMyContribution += myContributions[i];
+      }
+    }
     
     const result = {
-      personal: ethers.formatEther(personal),
-      sharedContribution: ethers.formatEther(sharedContribution),
-      totalShared: ethers.formatEther(totalShared)
+      personal: ethers.formatEther(personalBalance),
+      sharedContribution: ethers.formatEther(totalMyContribution),
+      totalShared: ethers.formatEther(totalSharedBalance)
     };
     
     console.log('Vault balances result:', result);
-    console.log('Personal (raw wei):', personal.toString());
-    console.log('=== END GET VAULT BALANCES ===');
+    console.log('Certificate count:', Number(certificateCount));
+    console.log('=== END GET MY VAULT BALANCES ===');
     
     return result;
   }
 
-  async getPersonalVault(address: string): Promise<string> {
+  /**
+   * Get shared vault info untuk certificate tertentu
+   */
+  async getSharedVaultInfo(certificateId: number): Promise<{
+    totalBalance: string;
+    myContribution: string;
+    partnerContribution: string;
+    partnerA: string;
+    partnerB: string;
+  }> {
     const contract = this.getContract();
-    const balance = await contract.personalVault(address);
+    console.log('=== GET SHARED VAULT INFO ===');
+    console.log('Certificate ID:', certificateId);
+    
+    const [totalBalance, myContribution, partnerContribution, partnerA, partnerB] = 
+      await contract.getSharedVaultInfo(certificateId);
+    
+    const result = {
+      totalBalance: ethers.formatEther(totalBalance),
+      myContribution: ethers.formatEther(myContribution),
+      partnerContribution: ethers.formatEther(partnerContribution),
+      partnerA,
+      partnerB
+    };
+    
+    console.log('Shared vault info:', result);
+    console.log('=== END SHARED VAULT INFO ===');
+    
+    return result;
+  }
+
+  /**
+   * Get all shared vaults for current user
+   */
+  async getAllMySharedVaults(): Promise<{
+    certificateIds: number[];
+    balances: string[];
+    myContributions: string[];
+  }> {
+    const contract = this.getContract();
+    const [certIds, balances, contributions] = await contract.getAllMySharedVaults();
+    
+    return {
+      certificateIds: certIds.map((id: bigint) => Number(id)),
+      balances: balances.map((b: bigint) => ethers.formatEther(b)),
+      myContributions: contributions.map((c: bigint) => ethers.formatEther(c))
+    };
+  }
+
+  /**
+   * Get couple shared vault - untuk kompatibilitas dengan UI lama
+   * Menggunakan certificate pertama yang ditemukan
+   */
+  async getCoupleSharedVault(): Promise<{
+    userContribution: string;
+    partnerContribution: string;
+    coupleTotal: string;
+    partnerAddress: string;
+    isMutualRegistered: boolean;
+  }> {
+    const contract = this.getContract();
+    console.log('=== GET COUPLE SHARED VAULT ===');
+    
+    // Get user's certificates
+    const myCerts = await this.getMyCertificates();
+    
+    if (myCerts.length === 0) {
+      console.log('No certificates found');
+      return {
+        userContribution: '0',
+        partnerContribution: '0',
+        coupleTotal: '0',
+        partnerAddress: '0x0000000000000000000000000000000000000000',
+        isMutualRegistered: false
+      };
+    }
+    
+    // Use the latest certificate
+    const certId = myCerts[myCerts.length - 1];
+    console.log('Using certificate ID:', certId);
+    
+    try {
+      const [totalBalance, myContribution, partnerContribution, partnerA, partnerB] = 
+        await contract.getSharedVaultInfo(certId);
+      
+      const myAddress = await this.getAccount();
+      const partnerAddress = myAddress?.toLowerCase() === partnerA.toLowerCase() ? partnerB : partnerA;
+      
+      const result = {
+        userContribution: ethers.formatEther(myContribution),
+        partnerContribution: ethers.formatEther(partnerContribution),
+        coupleTotal: ethers.formatEther(totalBalance),
+        partnerAddress,
+        isMutualRegistered: true // If we can get info, we're registered
+      };
+      
+      console.log('Couple shared vault:', result);
+      console.log('=== END COUPLE SHARED VAULT ===');
+      
+      return result;
+    } catch (e) {
+      console.log('Error getting shared vault info:', e);
+      return {
+        userContribution: '0',
+        partnerContribution: '0',
+        coupleTotal: '0',
+        partnerAddress: '0x0000000000000000000000000000000000000000',
+        isMutualRegistered: false
+      };
+    }
+  }
+
+  async getPersonalVault(): Promise<string> {
+    const contract = this.getContract();
+    const balance = await contract.getMyPersonalVault();
     return ethers.formatEther(balance);
   }
 
-  async getSharedVaultContribution(address: string): Promise<string> {
+  async getSharedVaultContribution(certificateId?: number): Promise<string> {
     const contract = this.getContract();
-    const contribution = await contract.sharedVaultContribution(address);
-    return ethers.formatEther(contribution);
+    
+    // If no certificateId provided, get from latest certificate
+    if (!certificateId) {
+      const myCerts = await this.getMyCertificates();
+      if (myCerts.length === 0) return '0';
+      certificateId = myCerts[myCerts.length - 1];
+    }
+    
+    try {
+      const contribution = await contract.getMySharedContribution(certificateId);
+      return ethers.formatEther(contribution);
+    } catch {
+      return '0';
+    }
   }
 
-  async getTotalSharedVault(): Promise<string> {
-    const contract = this.getContract();
-    const total = await contract.totalSharedVault();
-    return ethers.formatEther(total);
+  /**
+   * Get partner address dari certificate
+   */
+  async getMyPartner(): Promise<string> {
+    try {
+      const myCerts = await this.getMyCertificates();
+      if (myCerts.length === 0) {
+        return '0x0000000000000000000000000000000000000000';
+      }
+      
+      const certId = myCerts[myCerts.length - 1];
+      const contract = this.getContract();
+      const [partnerA, partnerB] = await contract.getCertificatePartners(certId);
+      
+      const myAddress = await this.getAccount();
+      return myAddress?.toLowerCase() === partnerA.toLowerCase() ? partnerB : partnerA;
+    } catch {
+      return '0x0000000000000000000000000000000000000000';
+    }
+  }
+
+  /**
+   * Check if user has active certificate (mutual registered)
+   */
+  async amIMutualRegistered(): Promise<boolean> {
+    try {
+      const myCerts = await this.getMyCertificates();
+      return myCerts.length > 0;
+    } catch {
+      return false;
+    }
   }
 
   // ============ Claim Functions ============
 
   async submitInternalClaim(vowId: number, penaltyPercentage: number): Promise<string> {
     const contract = this.getContract();
+    
+    console.log('=== SUBMIT INTERNAL CLAIM ===');
+    console.log('Vow ID:', vowId);
+    console.log('Penalty (basis points):', penaltyPercentage);
+    
+    // Check vow status first
+    const vow = await this.getVow(vowId);
+    const statusNum = Number(vow.status);
+    console.log('Vow status (number):', statusNum);
+    console.log('Vow status (label):', this.getStatusLabel(statusNum));
+    console.log('Vow escrow balance:', ethers.formatEther(vow.escrowBalance), 'ETH');
+    
+    if (statusNum !== 2) { // 2 = Active
+      throw new Error(`Vow tidak dalam status Active. Status saat ini: ${this.getStatusLabel(statusNum)} (${statusNum})`);
+    }
+    
+    // Check if already claimed
+    const isClaimed = await contract.vowClaimed(vowId);
+    console.log('Already claimed:', isClaimed);
+    
+    if (isClaimed) {
+      throw new Error('Vow ini sudah pernah di-claim sebelumnya.');
+    }
+    
     // penaltyPercentage is in basis points (100 = 1%, 7000 = 70%, 10000 = 100%)
     const tx = await contract.submitInternalClaim(vowId, penaltyPercentage);
+    console.log('Transaction sent:', tx.hash);
     const receipt = await tx.wait();
+    console.log('Transaction confirmed');
+    console.log('=== END SUBMIT INTERNAL CLAIM ===');
     return receipt.hash;
   }
 
@@ -511,8 +875,25 @@ class Web3Service {
     timestamp: number
   ): Promise<string> {
     const contract = this.getContract();
+    
+    console.log('=== SUBMIT AI CLAIM ===');
+    console.log('Vow ID:', vowId);
+    console.log('Reason:', reason);
+    
+    // Check vow status first
+    const vow = await this.getVow(vowId);
+    const statusNum = Number(vow.status);
+    console.log('Vow status (number):', statusNum);
+    
+    if (statusNum !== 2) { // 2 = Active
+      throw new Error(`Vow tidak dalam status Active. Status saat ini: ${this.getStatusLabel(statusNum)} (${statusNum})`);
+    }
+    
     const tx = await contract.submitAIClaim(vowId, reason, evidence, timestamp);
+    console.log('Transaction sent:', tx.hash);
     const receipt = await tx.wait();
+    console.log('Transaction confirmed');
+    console.log('=== END SUBMIT AI CLAIM ===');
     return receipt.hash;
   }
 

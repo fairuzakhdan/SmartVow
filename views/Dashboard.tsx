@@ -128,6 +128,10 @@ const Dashboard: React.FC = () => {
   const [loadingVaultBalance, setLoadingVaultBalance] = useState(false);
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
   const [loadingCertificates, setLoadingCertificates] = useState(false);
+  
+  // State untuk mengecek apakah user memiliki pasangan yang terdaftar di Marriage Certificate
+  const [hasRegisteredPartner, setHasRegisteredPartner] = useState(false);
+  const [registeredPartnerAddress, setRegisteredPartnerAddress] = useState<string | null>(null);
 
   // Calculate ETH distribution from shared vault contributions
   const calculateEthDistribution = (balances: { personal: string; sharedContribution: string; totalShared: string }) => {
@@ -386,41 +390,25 @@ const Dashboard: React.FC = () => {
       
       setPendingVows(vows);
       
-      // Extract partner profiles from vows AND certificates
+      // Extract partner profiles - PRIORITY: Certificate first, then SmartVow
       const profiles: PartnerProfile[] = [];
       const uniquePartners = new Set<string>();
       
-      // Add partners from SmartVow contracts
-      vows.forEach(vow => {
-        if (!uniquePartners.has(vow.partnerA.toLowerCase())) {
-          uniquePartners.add(vow.partnerA.toLowerCase());
-          profiles.push({
-            address: vow.partnerA,
-            role: 'A',
-            isCurrentUser: vow.partnerA.toLowerCase() === account.toLowerCase()
-          });
-        }
-        if (!uniquePartners.has(vow.partnerB.toLowerCase())) {
-          uniquePartners.add(vow.partnerB.toLowerCase());
-          profiles.push({
-            address: vow.partnerB,
-            role: 'B',
-            isCurrentUser: vow.partnerB.toLowerCase() === account.toLowerCase()
-          });
-        }
-      });
+      // STEP 1: Load from Certificate FIRST (this is the "official" record)
+      let hasCertificate = false;
       
-      // Also check CertificateNFT for additional partner info
       try {
         setLoadingCertificates(true);
         
-        // 1. First check localStorage for certificate data (faster)
+        // Check localStorage for certificate data (faster)
         const storedCerts = localStorage.getItem('smartvow_certificates');
         if (storedCerts) {
           const certificates = JSON.parse(storedCerts);
           console.log('Certificates from localStorage:', certificates);
           
           certificates.forEach((cert: any) => {
+            hasCertificate = true;
+            
             // Add Partner A from certificate
             if (cert.partnerA && !uniquePartners.has(cert.partnerA.address.toLowerCase())) {
               uniquePartners.add(cert.partnerA.address.toLowerCase());
@@ -430,12 +418,6 @@ const Dashboard: React.FC = () => {
                 role: 'A',
                 isCurrentUser: cert.partnerA.address.toLowerCase() === account.toLowerCase()
               });
-            } else if (cert.partnerA) {
-              // Update existing profile with name
-              const existingIndex = profiles.findIndex(p => p.address.toLowerCase() === cert.partnerA.address.toLowerCase());
-              if (existingIndex >= 0 && cert.partnerA.name) {
-                profiles[existingIndex].name = cert.partnerA.name;
-              }
             }
             
             // Add Partner B from certificate
@@ -447,17 +429,11 @@ const Dashboard: React.FC = () => {
                 role: 'B',
                 isCurrentUser: cert.partnerB.address.toLowerCase() === account.toLowerCase()
               });
-            } else if (cert.partnerB) {
-              // Update existing profile with name
-              const existingIndex = profiles.findIndex(p => p.address.toLowerCase() === cert.partnerB.address.toLowerCase());
-              if (existingIndex >= 0 && cert.partnerB.name) {
-                profiles[existingIndex].name = cert.partnerB.name;
-              }
             }
           });
         }
         
-        // 2. Then check blockchain for additional certificate data
+        // Also check blockchain for certificate data
         await certificateNFTService.connect();
         const certificateIds = await certificateNFTService.getUserCertificates(account);
         console.log('Certificate IDs found:', certificateIds);
@@ -465,7 +441,8 @@ const Dashboard: React.FC = () => {
         for (const certId of certificateIds) {
           try {
             const cert = await certificateNFTService.getCertificate(certId);
-            console.log('Certificate loaded:', {
+            hasCertificate = true;
+            console.log('Certificate loaded from blockchain:', {
               certId,
               partnerA: cert.partnerA,
               partnerAName: cert.partnerAName,
@@ -473,7 +450,7 @@ const Dashboard: React.FC = () => {
               partnerBName: cert.partnerBName
             });
             
-            // Add partners from certificate if not already added
+            // Add/Update Partner A from certificate
             if (!uniquePartners.has(cert.partnerA.toLowerCase())) {
               uniquePartners.add(cert.partnerA.toLowerCase());
               profiles.push({
@@ -483,13 +460,13 @@ const Dashboard: React.FC = () => {
                 isCurrentUser: cert.partnerA.toLowerCase() === account.toLowerCase()
               });
             } else {
-              // Update existing profile with name from certificate
               const existingIndex = profiles.findIndex(p => p.address.toLowerCase() === cert.partnerA.toLowerCase());
               if (existingIndex >= 0 && cert.partnerAName) {
                 profiles[existingIndex].name = cert.partnerAName;
               }
             }
             
+            // Add/Update Partner B from certificate
             if (!uniquePartners.has(cert.partnerB.toLowerCase())) {
               uniquePartners.add(cert.partnerB.toLowerCase());
               profiles.push({
@@ -499,7 +476,6 @@ const Dashboard: React.FC = () => {
                 isCurrentUser: cert.partnerB.toLowerCase() === account.toLowerCase()
               });
             } else {
-              // Update existing profile with name from certificate
               const existingIndex = profiles.findIndex(p => p.address.toLowerCase() === cert.partnerB.toLowerCase());
               if (existingIndex >= 0 && cert.partnerBName) {
                 profiles[existingIndex].name = cert.partnerBName;
@@ -515,13 +491,57 @@ const Dashboard: React.FC = () => {
         setLoadingCertificates(false);
       }
       
+      // STEP 2: Only add from SmartVow if NO certificate exists
+      if (!hasCertificate) {
+        vows.forEach(vow => {
+          if (!uniquePartners.has(vow.partnerA.toLowerCase())) {
+            uniquePartners.add(vow.partnerA.toLowerCase());
+            profiles.push({
+              address: vow.partnerA,
+              role: 'A',
+              isCurrentUser: vow.partnerA.toLowerCase() === account.toLowerCase()
+            });
+          }
+          if (!uniquePartners.has(vow.partnerB.toLowerCase())) {
+            uniquePartners.add(vow.partnerB.toLowerCase());
+            profiles.push({
+              address: vow.partnerB,
+              role: 'B',
+              isCurrentUser: vow.partnerB.toLowerCase() === account.toLowerCase()
+            });
+          }
+        });
+      }
+      
       setPartnerProfiles(profiles);
+      
+      // Check if user has a registered partner from Marriage Certificate
+      // Berangkas bersama hanya boleh dilihat oleh pasangan yang terdaftar di certificate yang sama
+      let hasPartner = false;
+      let partnerAddr: string | null = null;
+      
+      // Check from certificate data (priority)
+      if (hasCertificate) {
+        const certPartner = profiles.find(p => !p.isCurrentUser);
+        if (certPartner) {
+          hasPartner = true;
+          partnerAddr = certPartner.address;
+        }
+      }
+      
+      setHasRegisteredPartner(hasPartner);
+      setRegisteredPartnerAddress(partnerAddr);
+      console.log('Has registered partner (from certificate):', hasPartner);
+      console.log('Registered partner address:', partnerAddr);
+      
       console.log('=== PARTNER PROFILES DEBUG ===');
       console.log('Loaded vows:', vows.length);
       console.log('Partner profiles (including certificates):', profiles);
       console.log('Partner profiles with names:', profiles.filter(p => p.name));
       console.log('Current user profiles:', profiles.filter(p => p.isCurrentUser));
       console.log('Partner B profiles:', profiles.filter(p => !p.isCurrentUser));
+      console.log('Has certificate:', hasCertificate);
+      console.log('Has registered partner:', hasPartner);
       console.log('=== END DEBUG ===');
     } catch (e) {
       console.error('Failed to load vows from blockchain:', e);
@@ -679,12 +699,8 @@ const Dashboard: React.FC = () => {
       console.log('Using signAndActivateOnly - escrow will be locked from shared vault');
       await signAndActivateOnly(vowId);
       
-      // Update state langsung agar UI responsive
-      setPendingVows(prev => prev.map(v => 
-        v.vowId === vowId 
-          ? { ...v, partnerBSigned: true, isActive: true, status: 'active' } 
-          : v
-      ));
+      // HAPUS dari pendingVows karena sudah aktif
+      setPendingVows(prev => prev.filter(v => v.vowId !== vowId));
       
       // Update localStorage
       const agreements = JSON.parse(localStorage.getItem('smartvow_agreements') || '[]');
@@ -696,15 +712,19 @@ const Dashboard: React.FC = () => {
       setSuccess(`Vow #${vowId} berhasil ditandatangani dan diaktifkan! Escrow telah dikunci.`);
       console.log('=== SIGN AND ACTIVATE SELESAI ===');
       
-      // Refresh data dari blockchain (background)
-      loadVaultBalances();
-      loadVowsFromBlockchain();
+      // Refresh data dari blockchain
+      await Promise.all([
+        loadVaultBalances(),
+        loadVowsFromBlockchain()
+      ]);
       
     } catch (err: any) {
       console.error('Sign and Activate error:', err);
       
       if (err.message?.includes('Already signed')) {
         setError('Anda sudah menandatangani perjanjian ini.');
+        // Refresh untuk update UI
+        await loadVowsFromBlockchain();
       } else if (err.message?.includes('Partner A must sign')) {
         setError('Partner A belum menandatangani perjanjian ini.');
       } else if (err.message?.includes('No pending escrow')) {
@@ -1467,19 +1487,21 @@ const Dashboard: React.FC = () => {
           </div>
         </div>
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm relative">
-          {/* Tombol + absolute di pojok kanan atas */}
-          <button 
-            onClick={async () => {
-              await loadVaultBalances();
-              setDepositType('shared');
-              setShowDepositModal(true);
-            }}
-            disabled={loadingVaultBalance}
-            className="absolute -top-2 -right-2 p-1.5 bg-gradient-to-r from-purple-500 to-indigo-500 text-white rounded-full hover:shadow-lg transition-all disabled:opacity-50 shadow-md"
-            title="Transfer dari brankas pribadi ke bersama"
-          >
-            <PlusIcon className="h-3.5 w-3.5" />
-          </button>
+          {/* Tombol + absolute di pojok kanan atas - hanya tampil jika punya pasangan terdaftar di certificate */}
+          {hasRegisteredPartner && (
+            <button 
+              onClick={async () => {
+                await loadVaultBalances();
+                setDepositType('shared');
+                setShowDepositModal(true);
+              }}
+              disabled={loadingVaultBalance}
+              className="absolute -top-2 -right-2 p-1.5 bg-gradient-to-r from-purple-500 to-indigo-500 text-white rounded-full hover:shadow-lg transition-all disabled:opacity-50 shadow-md"
+              title="Transfer dari brankas pribadi ke bersama"
+            >
+              <PlusIcon className="h-3.5 w-3.5" />
+            </button>
+          )}
           <div className="flex items-center gap-3">
             <div className="p-2 bg-purple-50 rounded-lg"><ArchiveBoxIcon className="h-5 w-5 text-purple-600" /></div>
             <div className="flex-1">
@@ -1490,19 +1512,29 @@ const Dashboard: React.FC = () => {
                   <span className="text-sm text-purple-500">Loading...</span>
                 </div>
               ) : (
-                <p className="text-xl font-bold text-slate-900">{vaultBalance.shared.total.toFixed(5)} <span className="text-sm text-slate-400">ETH</span></p>
+                <p className="text-xl font-bold text-slate-900">
+                  {hasRegisteredPartner ? vaultBalance.shared.total.toFixed(5) : '0.00000'} <span className="text-sm text-slate-400">ETH</span>
+                </p>
               )}
             </div>
-            {/* Refresh button */}
-            <button 
-              onClick={loadVaultBalances}
-              disabled={loadingVaultBalance}
-              className="p-1 text-purple-400 hover:text-purple-600 rounded-lg transition-all disabled:opacity-50"
-              title="Refresh brankas bersama"
-            >
-              <ArrowPathIcon className={`h-3 w-3 ${loadingVaultBalance ? 'animate-spin' : ''}`} />
-            </button>
+            {/* Refresh button - hanya tampil jika punya pasangan terdaftar */}
+            {hasRegisteredPartner && (
+              <button 
+                onClick={loadVaultBalances}
+                disabled={loadingVaultBalance}
+                className="p-1 text-purple-400 hover:text-purple-600 rounded-lg transition-all disabled:opacity-50"
+                title="Refresh brankas bersama"
+              >
+                <ArrowPathIcon className={`h-3 w-3 ${loadingVaultBalance ? 'animate-spin' : ''}`} />
+              </button>
+            )}
           </div>
+          {/* Info jika tidak punya pasangan terdaftar */}
+          {!hasRegisteredPartner && (
+            <p className="text-[10px] text-slate-400 mt-2">
+              🔒 Mint Marriage Certificate untuk mengakses
+            </p>
+          )}
         </div>
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
           <div className="flex items-center gap-3">
@@ -1536,12 +1568,15 @@ const Dashboard: React.FC = () => {
         </div>
         <div className="bg-gradient-to-br from-amber-500 to-orange-500 p-4 rounded-xl shadow-sm text-white relative">
           {/* Status badge di pojok kanan atas */}
-          {!loadingVows && vaultBalance.escrow.total === 0 && (
+          {!hasRegisteredPartner ? (
             <span className="absolute top-2 right-2 text-[8px] bg-white/20 px-2 py-0.5 rounded-full font-medium">
               Kosong
             </span>
-          )}
-          {vaultBalance.escrow.locked && (
+          ) : !loadingVows && vaultBalance.escrow.total === 0 ? (
+            <span className="absolute top-2 right-2 text-[8px] bg-white/20 px-2 py-0.5 rounded-full font-medium">
+              Kosong
+            </span>
+          ) : vaultBalance.escrow.locked && (
             <span className="absolute top-2 right-2 text-[8px] bg-white/20 px-2 py-0.5 rounded-full font-medium">
               🔒 Locked
             </span>
@@ -1556,13 +1591,21 @@ const Dashboard: React.FC = () => {
                   <span className="text-sm text-white/80">Loading...</span>
                 </div>
               ) : (
-                <p className="text-xl font-bold">{vaultBalance.escrow.total.toFixed(5)} <span className="text-sm text-white/70">ETH</span></p>
+                <p className="text-xl font-bold">
+                  {hasRegisteredPartner ? vaultBalance.escrow.total.toFixed(5) : '0.00000'} <span className="text-sm text-white/70">ETH</span>
+                </p>
               )}
             </div>
           </div>
-          <p className="text-[10px] text-white/60 mt-2">
-            💰 Sisa: {vaultBalance.shared.available.toFixed(5)} ETH
-          </p>
+          {hasRegisteredPartner ? (
+            <p className="text-[10px] text-white/60 mt-2">
+              💰 Sisa: {vaultBalance.shared.available.toFixed(5)} ETH
+            </p>
+          ) : (
+            <p className="text-[10px] text-white/60 mt-2">
+              🔒 Mint Marriage Certificate untuk mengakses
+            </p>
+          )}
         </div>
       </div>
 
@@ -1665,6 +1708,39 @@ const Dashboard: React.FC = () => {
               <div className="flex-1">
                 <p className="text-sm font-bold text-slate-700">
                   {(() => {
+                    // Get partner from the most recent/active vow where current user is involved
+                    const relevantVow = pendingVows.find(v => 
+                      v.partnerA.toLowerCase() === account?.toLowerCase() || 
+                      v.partnerB.toLowerCase() === account?.toLowerCase()
+                    );
+                    
+                    // PRIORITY: First check certificate for partner name
+                    // Certificate is the "official" record
+                    const certPartner = partnerProfiles.find(p => 
+                      !p.isCurrentUser && p.name // Has name = from certificate
+                    );
+                    
+                    if (certPartner?.name) {
+                      return certPartner.name;
+                    }
+                    
+                    if (relevantVow) {
+                      // Current user's partner is the other person in the vow
+                      const partnerAddress = relevantVow.partnerA.toLowerCase() === account?.toLowerCase() 
+                        ? relevantVow.partnerB 
+                        : relevantVow.partnerA;
+                      
+                      // Find profile with name for this partner
+                      const partnerProfile = partnerProfiles.find(p => 
+                        p.address.toLowerCase() === partnerAddress.toLowerCase()
+                      );
+                      
+                      if (partnerProfile?.name) {
+                        return partnerProfile.name;
+                      }
+                    }
+                    
+                    // Fallback to old logic
                     const partnerB = partnerProfiles.find(p => !p.isCurrentUser);
                     if (partnerB?.name) {
                       return partnerB.name;
@@ -1674,63 +1750,137 @@ const Dashboard: React.FC = () => {
                 </p>
                 <p className="text-xs text-slate-400 font-mono">
                   {(() => {
-                    // Find partner B from existing agreements or certificates
+                    // PRIORITY: First check certificate for partner address
+                    const certPartner = partnerProfiles.find(p => 
+                      !p.isCurrentUser && p.name // Has name = from certificate
+                    );
+                    
+                    if (certPartner) {
+                      return shortenAddress(certPartner.address);
+                    }
+                    
+                    // Get partner from the most recent/active vow
+                    const relevantVow = pendingVows.find(v => 
+                      v.partnerA.toLowerCase() === account?.toLowerCase() || 
+                      v.partnerB.toLowerCase() === account?.toLowerCase()
+                    );
+                    
+                    if (relevantVow) {
+                      const partnerAddress = relevantVow.partnerA.toLowerCase() === account?.toLowerCase() 
+                        ? relevantVow.partnerB 
+                        : relevantVow.partnerA;
+                      return shortenAddress(partnerAddress);
+                    }
+                    
                     const partnerB = partnerProfiles.find(p => !p.isCurrentUser);
                     return partnerB ? shortenAddress(partnerB.address) : 'Belum diundang';
                   })()}
                 </p>
               </div>
               {(() => {
-                const partnerB = partnerProfiles.find(p => !p.isCurrentUser);
-                if (partnerB?.name) {
+                // PRIORITY: Check certificate first
+                const certPartner = partnerProfiles.find(p => 
+                  !p.isCurrentUser && p.name
+                );
+                
+                if (certPartner?.name) {
                   return (
                     <span className="text-[8px] bg-emerald-100 text-emerald-600 px-1.5 py-0.5 rounded-full font-bold uppercase">
                       CERTIFIED
                     </span>
                   );
-                } else if (partnerB) {
-                  return (
-                    <span className="text-[8px] bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded-full font-bold uppercase">
-                      LINKED
-                    </span>
-                  );
-                } else {
-                  return (
-                    <span className="text-[8px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded-full font-bold uppercase">
-                      PENDING
-                    </span>
-                  );
                 }
+                
+                // Get partner from the most recent/active vow
+                const relevantVow = pendingVows.find(v => 
+                  v.partnerA.toLowerCase() === account?.toLowerCase() || 
+                  v.partnerB.toLowerCase() === account?.toLowerCase()
+                );
+                
+                if (relevantVow) {
+                  const partnerAddress = relevantVow.partnerA.toLowerCase() === account?.toLowerCase() 
+                    ? relevantVow.partnerB 
+                    : relevantVow.partnerA;
+                  
+                  const partnerProfile = partnerProfiles.find(p => 
+                    p.address.toLowerCase() === partnerAddress.toLowerCase()
+                  );
+                  
+                  if (partnerProfile?.name) {
+                    return (
+                      <span className="text-[8px] bg-emerald-100 text-emerald-600 px-1.5 py-0.5 rounded-full font-bold uppercase">
+                        CERTIFIED
+                      </span>
+                    );
+                  } else {
+                    return (
+                      <span className="text-[8px] bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded-full font-bold uppercase">
+                        LINKED
+                      </span>
+                    );
+                  }
+                }
+                
+                return (
+                  <span className="text-[8px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded-full font-bold uppercase">
+                    PENDING
+                  </span>
+                );
               })()}
             </div>
             
             <div className="space-y-1">
               {(() => {
-                const partnerB = partnerProfiles.find(p => !p.isCurrentUser);
-                return partnerB?.name && (
-                  <div className="flex justify-between items-center text-xs">
-                    <span className="text-slate-500">Nama:</span>
-                    <span className="text-slate-700 font-medium">{partnerB.name}</span>
-                  </div>
+                const relevantVow = pendingVows.find(v => 
+                  v.partnerA.toLowerCase() === account?.toLowerCase() || 
+                  v.partnerB.toLowerCase() === account?.toLowerCase()
                 );
+                
+                if (relevantVow) {
+                  const partnerAddress = relevantVow.partnerA.toLowerCase() === account?.toLowerCase() 
+                    ? relevantVow.partnerB 
+                    : relevantVow.partnerA;
+                  
+                  const partnerProfile = partnerProfiles.find(p => 
+                    p.address.toLowerCase() === partnerAddress.toLowerCase()
+                  );
+                  
+                  return partnerProfile?.name && (
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="text-slate-500">Nama:</span>
+                      <span className="text-slate-700 font-medium">{partnerProfile.name}</span>
+                    </div>
+                  );
+                }
+                return null;
               })()}
               <div className="flex justify-between items-center text-xs">
                 <span className="text-slate-500">Address:</span>
                 {(() => {
-                  const partnerB = partnerProfiles.find(p => !p.isCurrentUser);
-                  return partnerB ? (
-                    <a 
-                      href={`https://sepolia.basescan.org/address/${partnerB.address}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-indigo-600 hover:underline font-mono flex items-center gap-1"
-                    >
-                      {partnerB.address.slice(0, 6)}...{partnerB.address.slice(-4)}
-                      <ArrowTopRightOnSquareIcon className="h-3 w-3" />
-                    </a>
-                  ) : (
-                    <span className="text-slate-400">Belum ada perjanjian</span>
+                  const relevantVow = pendingVows.find(v => 
+                    v.partnerA.toLowerCase() === account?.toLowerCase() || 
+                    v.partnerB.toLowerCase() === account?.toLowerCase()
                   );
+                  
+                  if (relevantVow) {
+                    const partnerAddress = relevantVow.partnerA.toLowerCase() === account?.toLowerCase() 
+                      ? relevantVow.partnerB 
+                      : relevantVow.partnerA;
+                    
+                    return (
+                      <a 
+                        href={`https://sepolia.basescan.org/address/${partnerAddress}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-indigo-600 hover:underline font-mono flex items-center gap-1"
+                      >
+                        {partnerAddress.slice(0, 6)}...{partnerAddress.slice(-4)}
+                        <ArrowTopRightOnSquareIcon className="h-3 w-3" />
+                      </a>
+                    );
+                  }
+                  
+                  return <span className="text-slate-400">Belum ada perjanjian</span>;
                 })()}
               </div>
             </div>
@@ -1751,7 +1901,7 @@ const Dashboard: React.FC = () => {
       {/* Main Content */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 space-y-6">
-          {/* Chart */}
+          {/* Chart - tampilkan angka 0 jika tidak punya pasangan terdaftar */}
           <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
             <div className="flex justify-between items-center mb-6">
               <div>
@@ -1759,27 +1909,42 @@ const Dashboard: React.FC = () => {
                 <p className="text-xs text-slate-500">Aset dikunci dalam escrow</p>
               </div>
               <div className="text-right">
-                <p className="text-xl font-bold text-indigo-600">{vaultBalance.shared.total.toFixed(5)} ETH</p>
+                <p className="text-xl font-bold text-indigo-600">
+                  {hasRegisteredPartner ? vaultBalance.shared.total.toFixed(5) : '0.00000'} ETH
+                </p>
                 <p className="text-[10px] text-emerald-600 font-bold">Brankas Bersama</p>
               </div>
             </div>
-            <div className="h-64 w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={mockAssetHistory}>
-                  <defs>
-                    <linearGradient id="colorVal" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#4f46e5" stopOpacity={0.1}/>
-                      <stop offset="95%" stopColor="#4f46e5" stopOpacity={0}/>
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                  <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#94a3b8', fontSize: 10}} />
-                  <YAxis axisLine={false} tickLine={false} tick={{fill: '#94a3b8', fontSize: 10}} />
-                  <Tooltip contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 10px 25px -5px rgb(0 0 0 / 0.1)'}} />
-                  <Area type="monotone" dataKey="value" stroke="#4f46e5" strokeWidth={3} fillOpacity={1} fill="url(#colorVal)" />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
+            {hasRegisteredPartner ? (
+              <div className="h-64 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={mockAssetHistory}>
+                    <defs>
+                      <linearGradient id="colorVal" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#4f46e5" stopOpacity={0.1}/>
+                        <stop offset="95%" stopColor="#4f46e5" stopOpacity={0}/>
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                    <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#94a3b8', fontSize: 10}} />
+                    <YAxis axisLine={false} tickLine={false} tick={{fill: '#94a3b8', fontSize: 10}} />
+                    <Tooltip contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 10px 25px -5px rgb(0 0 0 / 0.1)'}} />
+                    <Area type="monotone" dataKey="value" stroke="#4f46e5" strokeWidth={3} fillOpacity={1} fill="url(#colorVal)" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <div className="h-64 w-full flex items-center justify-center bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                <div className="text-center">
+                  <LockClosedIcon className="h-12 w-12 text-slate-300 mx-auto mb-3" />
+                  <p className="text-sm text-slate-500 font-medium">Belum Ada Pasangan Terdaftar</p>
+                  <p className="text-xs text-slate-400 mt-1">Mint Marriage Certificate untuk mengakses brankas bersama</p>
+                  <Link to="/certificate" className="inline-flex items-center gap-1 mt-3 text-xs text-indigo-600 hover:text-indigo-700 font-medium">
+                    <PlusIcon className="h-3 w-3" /> Mint Certificate
+                  </Link>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* All Agreements List */}
@@ -1912,17 +2077,28 @@ const Dashboard: React.FC = () => {
           <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-bold text-slate-900">Distribusi Harta (ETH)</h3>
-              <button 
-                onClick={loadVaultBalances}
-                disabled={loadingVaultBalance}
-                className="p-1 text-slate-400 hover:text-indigo-600 rounded-lg transition-all disabled:opacity-50"
-                title="Refresh distribusi ETH"
-              >
-                <ArrowPathIcon className={`h-4 w-4 ${loadingVaultBalance ? 'animate-spin' : ''}`} />
-              </button>
+              {hasRegisteredPartner && (
+                <button 
+                  onClick={loadVaultBalances}
+                  disabled={loadingVaultBalance}
+                  className="p-1 text-slate-400 hover:text-indigo-600 rounded-lg transition-all disabled:opacity-50"
+                  title="Refresh distribusi ETH"
+                >
+                  <ArrowPathIcon className={`h-4 w-4 ${loadingVaultBalance ? 'animate-spin' : ''}`} />
+                </button>
+              )}
             </div>
             
-            {loadingVaultBalance ? (
+            {!hasRegisteredPartner ? (
+              <div className="text-center py-8">
+                <LockClosedIcon className="h-12 w-12 text-slate-200 mx-auto mb-3" />
+                <p className="text-sm text-slate-500 font-medium">Belum Ada Pasangan</p>
+                <p className="text-xs text-slate-400 mt-1">Mint Marriage Certificate untuk melihat distribusi harta bersama</p>
+                <Link to="/certificate" className="inline-flex items-center gap-1 mt-3 text-xs text-indigo-600 hover:text-indigo-700 font-medium">
+                  <PlusIcon className="h-3 w-3" /> Mint Certificate
+                </Link>
+              </div>
+            ) : loadingVaultBalance ? (
               <div className="flex items-center justify-center h-40">
                 <ArrowPathIcon className="h-8 w-8 text-indigo-500 animate-spin" />
               </div>

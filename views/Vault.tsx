@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useWeb3 } from '../contexts/Web3Context';
-import { assetNFTService, web3Service } from '../services/web3Service';
+import { assetNFTService, certificateNFTService, web3Service } from '../services/web3Service';
 import { 
   ArrowDownLeftIcon, 
   LockClosedIcon,
@@ -77,6 +77,10 @@ const Vault: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  
+  // State untuk mengecek apakah user memiliki pasangan terdaftar di Marriage Certificate
+  const [hasRegisteredPartner, setHasRegisteredPartner] = useState(false);
+  const [registeredPartnerAddress, setRegisteredPartnerAddress] = useState<string | null>(null);
 
   // Fetch metadata from IPFS to get ownership info
   const fetchMetadataFromIPFS = async (metadataURI: string): Promise<{ ownership?: string; category?: string; image?: string } | null> => {
@@ -194,6 +198,72 @@ const Vault: React.FC = () => {
     setLoadingBalance(true);
     try {
       console.log('=== VAULT: LOAD BALANCES FROM BLOCKCHAIN ===');
+      
+      // Check if user has registered partner from Marriage Certificate
+      let hasPartner = false;
+      let partnerAddr: string | null = null;
+      
+      try {
+        // Check localStorage first (faster)
+        const storedCerts = localStorage.getItem('smartvow_certificates');
+        if (storedCerts) {
+          const certificates = JSON.parse(storedCerts);
+          for (const cert of certificates) {
+            if (cert.partnerA?.address?.toLowerCase() === account.toLowerCase()) {
+              hasPartner = true;
+              partnerAddr = cert.partnerB?.address;
+              break;
+            }
+            if (cert.partnerB?.address?.toLowerCase() === account.toLowerCase()) {
+              hasPartner = true;
+              partnerAddr = cert.partnerA?.address;
+              break;
+            }
+          }
+        }
+        
+        // Also check blockchain for certificate
+        if (!hasPartner) {
+          await certificateNFTService.connect();
+          const certificateIds = await certificateNFTService.getUserCertificates(account);
+          for (const certId of certificateIds) {
+            try {
+              const cert = await certificateNFTService.getCertificate(certId);
+              if (cert.partnerA.toLowerCase() === account.toLowerCase()) {
+                hasPartner = true;
+                partnerAddr = cert.partnerB;
+                break;
+              }
+              if (cert.partnerB.toLowerCase() === account.toLowerCase()) {
+                hasPartner = true;
+                partnerAddr = cert.partnerA;
+                break;
+              }
+            } catch (e) {
+              console.error('Failed to load certificate:', e);
+            }
+          }
+        }
+        
+        // Auto-sync partner ke SmartVow jika ada certificate tapi belum register
+        if (hasPartner && partnerAddr) {
+          console.log('Auto-syncing partner to SmartVow...');
+          try {
+            const syncResult = await web3Service.autoSyncPartnerFromCertificate();
+            console.log('Auto-sync result:', syncResult);
+          } catch (e) {
+            console.log('Auto-sync skipped or failed:', e);
+          }
+        }
+      } catch (e) {
+        console.error('Failed to check certificates:', e);
+      }
+      
+      setHasRegisteredPartner(hasPartner);
+      setRegisteredPartnerAddress(partnerAddr);
+      console.log('Has registered partner (from certificate):', hasPartner);
+      console.log('Registered partner address:', partnerAddr);
+      
       const balances = await getVaultBalances();
       console.log('Vault balances from blockchain:', balances);
       
@@ -262,7 +332,12 @@ const Vault: React.FC = () => {
   }, [isConnected, account]);
 
   // Filter assets based on selected filter
+  // Jika tidak punya pasangan aktif, sembunyikan aset bersama
   const filteredAssets = allAssets.filter((asset: any) => {
+    // Jika tidak punya pasangan aktif, sembunyikan semua aset bersama
+    if (!hasRegisteredPartner && asset.ownership === 'Harta Bersama') {
+      return false;
+    }
     if (assetFilter === 'all') return true;
     if (assetFilter === 'personal') return asset.ownership === 'Harta Pribadi';
     if (assetFilter === 'joint') return asset.ownership === 'Harta Bersama';
@@ -516,12 +591,18 @@ const Vault: React.FC = () => {
               </button>
               <button 
                 onClick={() => setShowTransferModal(true)}
-                disabled={balance.personal.partnerA <= 0}
+                disabled={balance.personal.partnerA <= 0 || !hasRegisteredPartner}
                 className="flex-1 py-2 bg-purple-50 text-purple-600 rounded-xl text-xs font-bold hover:bg-purple-100 transition-all flex items-center justify-center gap-1 disabled:opacity-50"
+                title={!hasRegisteredPartner ? 'Mint Marriage Certificate terlebih dahulu' : ''}
               >
                 <ArrowsRightLeftIcon className="h-3 w-3" /> Transfer
               </button>
             </div>
+            {!hasRegisteredPartner && (
+              <p className="text-[10px] text-slate-400 mt-2 text-center">
+                💡 Mint Marriage Certificate untuk transfer ke brankas bersama
+              </p>
+            )}
           </div>
 
           {/* Shared Vault Card */}
@@ -539,42 +620,60 @@ const Vault: React.FC = () => {
                       <span className="text-sm text-slate-400">Memuat...</span>
                     </div>
                   ) : (
-                    <p className="text-2xl font-bold text-slate-900">{balance.shared.total.toFixed(4)} <span className="text-sm text-slate-400">ETH</span></p>
+                    <p className="text-2xl font-bold text-slate-900">
+                      {hasRegisteredPartner ? balance.shared.total.toFixed(4) : '0.0000'} <span className="text-sm text-slate-400">ETH</span>
+                    </p>
                   )}
                 </div>
               </div>
+              {!hasRegisteredPartner && (
+                <span className="text-[9px] bg-slate-100 text-slate-500 px-2 py-1 rounded-full font-bold">🔒 LOCKED</span>
+              )}
             </div>
             
-            {/* Contribution Bar */}
-            {balance.shared.total > 0 && (
-              <div className="mb-4">
-                <div className="flex justify-between text-[10px] font-bold mb-1">
-                  <span className="text-indigo-600">A: {partnerAPercent}%</span>
-                  <span className="text-rose-600">B: {partnerBPercent}%</span>
+            {/* Content hanya tampil jika punya pasangan terdaftar */}
+            {hasRegisteredPartner ? (
+              <>
+                {/* Contribution Bar */}
+                {balance.shared.total > 0 && (
+                  <div className="mb-4">
+                    <div className="flex justify-between text-[10px] font-bold mb-1">
+                      <span className="text-indigo-600">A: {partnerAPercent}%</span>
+                      <span className="text-rose-600">B: {partnerBPercent}%</span>
+                    </div>
+                    <div className="h-2 bg-slate-100 rounded-full flex overflow-hidden">
+                      <div className="bg-indigo-500 h-full transition-all" style={{ width: `${partnerAPercent}%` }} />
+                      <div className="bg-rose-500 h-full transition-all" style={{ width: `${partnerBPercent}%` }} />
+                    </div>
+                  </div>
+                )}
+                
+                <div className="space-y-3 mb-4">
+                  <div className="flex justify-between items-center p-3 bg-indigo-50 rounded-xl">
+                    <span className="text-xs text-slate-600">Kontribusi A</span>
+                    <span className="text-sm font-bold text-indigo-600">{balance.shared.partnerAContribution.toFixed(4)} ETH</span>
+                  </div>
+                  <div className="flex justify-between items-center p-3 bg-rose-50 rounded-xl">
+                    <span className="text-xs text-slate-600">Kontribusi B</span>
+                    <span className="text-sm font-bold text-rose-600">{balance.shared.partnerBContribution.toFixed(4)} ETH</span>
+                  </div>
                 </div>
-                <div className="h-2 bg-slate-100 rounded-full flex overflow-hidden">
-                  <div className="bg-indigo-500 h-full transition-all" style={{ width: `${partnerAPercent}%` }} />
-                  <div className="bg-rose-500 h-full transition-all" style={{ width: `${partnerBPercent}%` }} />
+                
+                <div className="p-3 bg-purple-50 rounded-xl border border-purple-100">
+                  <p className="text-[10px] text-purple-700 font-medium">
+                    💡 Dana di sini bisa dijadikan jaminan escrow saat buat perjanjian
+                  </p>
                 </div>
+              </>
+            ) : (
+              <div className="text-center py-4">
+                <LockClosedIcon className="h-8 w-8 text-slate-300 mx-auto mb-2" />
+                <p className="text-xs text-slate-500">Mint Marriage Certificate untuk mengakses</p>
+                <Link to="/certificate" className="inline-flex items-center gap-1 mt-2 text-xs text-purple-600 hover:text-purple-700 font-medium">
+                  <PlusIcon className="h-3 w-3" /> Mint Certificate
+                </Link>
               </div>
             )}
-            
-            <div className="space-y-3 mb-4">
-              <div className="flex justify-between items-center p-3 bg-indigo-50 rounded-xl">
-                <span className="text-xs text-slate-600">Kontribusi A</span>
-                <span className="text-sm font-bold text-indigo-600">{balance.shared.partnerAContribution.toFixed(4)} ETH</span>
-              </div>
-              <div className="flex justify-between items-center p-3 bg-rose-50 rounded-xl">
-                <span className="text-xs text-slate-600">Kontribusi B</span>
-                <span className="text-sm font-bold text-rose-600">{balance.shared.partnerBContribution.toFixed(4)} ETH</span>
-              </div>
-            </div>
-            
-            <div className="p-3 bg-purple-50 rounded-xl border border-purple-100">
-              <p className="text-[10px] text-purple-700 font-medium">
-                💡 Dana di sini bisa dijadikan jaminan escrow saat buat perjanjian
-              </p>
-            </div>
           </div>
 
           {/* Escrow Card */}
@@ -586,31 +685,54 @@ const Vault: React.FC = () => {
                 </div>
                 <div>
                   <p className="text-xs text-white/70 font-medium">Escrow Terkunci</p>
-                  <p className="text-2xl font-bold">{balance.escrow.total.toFixed(4)} <span className="text-sm text-white/70">ETH</span></p>
+                  <p className="text-2xl font-bold">
+                    {hasRegisteredPartner ? balance.escrow.total.toFixed(4) : '0.0000'} <span className="text-sm text-white/70">ETH</span>
+                  </p>
                 </div>
               </div>
-              {balance.escrow.locked && (
+              {!hasRegisteredPartner ? (
+                <span className="text-[9px] bg-white/20 px-2 py-1 rounded-full font-bold">Kosong</span>
+              ) : balance.escrow.locked && (
                 <span className="text-[9px] bg-white/20 px-2 py-1 rounded-full font-bold">🔒 LOCKED</span>
               )}
             </div>
             
-            <div className="space-y-3 mb-6">
-              <div className="flex justify-between items-center p-3 bg-white/10 rounded-xl">
-                <span className="text-xs text-white/80">Total di Brankas Bersama</span>
-                <span className="text-sm font-bold">{balance.shared.total.toFixed(4)} ETH</span>
+            {hasRegisteredPartner ? (
+              <div className="space-y-3 mb-6">
+                <div className="flex justify-between items-center p-3 bg-white/10 rounded-xl">
+                  <span className="text-xs text-white/80">Total di Brankas Bersama</span>
+                  <span className="text-sm font-bold">{balance.shared.total.toFixed(4)} ETH</span>
+                </div>
+                <div className="flex justify-between items-center p-3 bg-white/10 rounded-xl">
+                  <span className="text-xs text-white/80">Terkunci di Escrow</span>
+                  <span className="text-sm font-bold">{balance.escrow.total.toFixed(4)} ETH</span>
+                </div>
+                <div className="flex justify-between items-center p-3 bg-white/20 rounded-xl border border-white/20">
+                  <span className="text-xs font-bold">Sisa (Belum Terkunci)</span>
+                  <span className="text-sm font-bold">{escrowAvailable.toFixed(4)} ETH</span>
+                </div>
               </div>
-              <div className="flex justify-between items-center p-3 bg-white/10 rounded-xl">
-                <span className="text-xs text-white/80">Terkunci di Escrow</span>
-                <span className="text-sm font-bold">{balance.escrow.total.toFixed(4)} ETH</span>
+            ) : (
+              <div className="space-y-3 mb-6">
+                <div className="flex justify-between items-center p-3 bg-white/10 rounded-xl">
+                  <span className="text-xs text-white/80">Total di Brankas Bersama</span>
+                  <span className="text-sm font-bold">0.0000 ETH</span>
+                </div>
+                <div className="flex justify-between items-center p-3 bg-white/10 rounded-xl">
+                  <span className="text-xs text-white/80">Terkunci di Escrow</span>
+                  <span className="text-sm font-bold">0.0000 ETH</span>
+                </div>
+                <div className="flex justify-between items-center p-3 bg-white/20 rounded-xl border border-white/20">
+                  <span className="text-xs font-bold">Sisa (Belum Terkunci)</span>
+                  <span className="text-sm font-bold">0.0000 ETH</span>
+                </div>
               </div>
-              <div className="flex justify-between items-center p-3 bg-white/20 rounded-xl border border-white/20">
-                <span className="text-xs font-bold">Sisa (Belum Terkunci)</span>
-                <span className="text-sm font-bold">{escrowAvailable.toFixed(4)} ETH</span>
-              </div>
-            </div>
+            )}
             
             <p className="text-[10px] text-white/70">
-              Escrow otomatis terkunci saat perjanjian aktif dan dibagi sesuai klausul
+              {hasRegisteredPartner 
+                ? 'Escrow otomatis terkunci saat perjanjian aktif dan dibagi sesuai klausul'
+                : '🔒 Mint Marriage Certificate untuk mengakses fitur ini'}
             </p>
           </div>
         </div>
@@ -646,7 +768,7 @@ const Vault: React.FC = () => {
                     : 'text-slate-500 hover:text-slate-700'
                 }`}
               >
-                Semua ({allAssets.length})
+                Semua ({hasRegisteredPartner ? allAssets.length : personalAssetsCount})
               </button>
               <button
                 onClick={() => setAssetFilter('personal')}
@@ -658,16 +780,19 @@ const Vault: React.FC = () => {
               >
                 <UserIcon className="h-3 w-3" /> Pribadi ({personalAssetsCount})
               </button>
-              <button
-                onClick={() => setAssetFilter('joint')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 ${
-                  assetFilter === 'joint' 
-                    ? 'bg-white text-rose-600 shadow-sm' 
-                    : 'text-slate-500 hover:text-slate-700'
-                }`}
-              >
-                <UsersIcon className="h-3 w-3" /> Bersama ({jointAssetsCount})
-              </button>
+              {/* Filter Bersama hanya tampil jika punya pasangan aktif */}
+              {hasRegisteredPartner && (
+                <button
+                  onClick={() => setAssetFilter('joint')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 ${
+                    assetFilter === 'joint' 
+                      ? 'bg-white text-rose-600 shadow-sm' 
+                      : 'text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  <UsersIcon className="h-3 w-3" /> Bersama ({jointAssetsCount})
+                </button>
+              )}
             </div>
           </div>
           

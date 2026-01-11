@@ -4,10 +4,14 @@ pragma solidity ^0.8.24;
 import {ERC721} from "../lib/solmate/src/tokens/ERC721.sol";
 import {Owned} from "../lib/solmate/src/auth/Owned.sol";
 
+interface ISmartVow {
+    function registerCertificate(uint256 _certificateId, address _partnerA, address _partnerB) external;
+}
+
 /**
  * @title MarriageCertificateNFT - Sertifikat Pernikahan Digital
  * @notice NFT untuk sertifikat pernikahan on-chain di Base
- * @dev ERC-721 dengan metadata on-chain
+ * @dev V2: Auto-register certificate ke SmartVow untuk brankas bersama
  */
 contract MarriageCertificateNFT is ERC721, Owned {
     // ============ Structs ============
@@ -17,7 +21,7 @@ contract MarriageCertificateNFT is ERC721, Owned {
         string partnerAName;
         string partnerBName;
         string vows;
-        uint256 vowId; // Reference to SmartVow contract
+        uint256 vowId;
         uint256 mintedAt;
         string metadataURI;
     }
@@ -29,7 +33,7 @@ contract MarriageCertificateNFT is ERC721, Owned {
     
     mapping(uint256 => Certificate) public certificates;
     mapping(address => uint256[]) public userCertificates;
-    mapping(uint256 => bool) public vowIdMinted; // Prevent duplicate minting
+    mapping(uint256 => bool) public vowIdMinted;
 
     // ============ Events ============
     event CertificateMinted(
@@ -39,6 +43,7 @@ contract MarriageCertificateNFT is ERC721, Owned {
         uint256 vowId
     );
     event MintPriceUpdated(uint256 oldPrice, uint256 newPrice);
+    event SmartVowUpdated(address indexed oldContract, address indexed newContract);
 
     // ============ Constructor ============
     constructor(address _smartVowContract) ERC721("SmartVow Marriage Certificate", "SVMC") Owned(msg.sender) {
@@ -50,12 +55,7 @@ contract MarriageCertificateNFT is ERC721, Owned {
 
     /**
      * @notice Mint sertifikat pernikahan NFT
-     * @param _partnerB Alamat pasangan
-     * @param _partnerAName Nama partner A
-     * @param _partnerBName Nama partner B
-     * @param _vows Ikrar pernikahan
-     * @param _vowId ID dari SmartVow contract
-     * @param _metadataURI URI metadata (IPFS)
+     * @dev Otomatis register ke SmartVow untuk brankas bersama
      */
     function mintCertificate(
         address _partnerB,
@@ -90,11 +90,19 @@ contract MarriageCertificateNFT is ERC721, Owned {
 
         _mint(msg.sender, tokenId);
 
+        // Auto-register ke SmartVow untuk brankas bersama
+        if (smartVowContract != address(0)) {
+            try ISmartVow(smartVowContract).registerCertificate(tokenId, msg.sender, _partnerB) {
+                // Success
+            } catch {
+                // Ignore if registration fails (SmartVow might not be set)
+            }
+        }
+
         emit CertificateMinted(tokenId, msg.sender, _partnerB, _vowId);
 
         return tokenId;
     }
-
 
     /**
      * @notice Get certificate details
@@ -119,34 +127,44 @@ contract MarriageCertificateNFT is ERC721, Owned {
         return certificates[_tokenId].metadataURI;
     }
 
-    // ============ Admin Functions ============
+    /**
+     * @notice Check if user is partner in certificate
+     */
+    function isPartnerInCertificate(uint256 _tokenId, address _user) external view returns (bool) {
+        if (_ownerOf[_tokenId] == address(0)) return false;
+        Certificate memory cert = certificates[_tokenId];
+        return cert.partnerA == _user || cert.partnerB == _user;
+    }
 
     /**
-     * @notice Update mint price
+     * @notice Get partner address from certificate
      */
+    function getPartner(uint256 _tokenId, address _user) external view returns (address) {
+        require(_ownerOf[_tokenId] != address(0), "Token does not exist");
+        Certificate memory cert = certificates[_tokenId];
+        if (cert.partnerA == _user) return cert.partnerB;
+        if (cert.partnerB == _user) return cert.partnerA;
+        revert("Not a partner");
+    }
+
+    // ============ Admin Functions ============
+
     function setMintPrice(uint256 _newPrice) external onlyOwner {
         uint256 oldPrice = mintPrice;
         mintPrice = _newPrice;
         emit MintPriceUpdated(oldPrice, _newPrice);
     }
 
-    /**
-     * @notice Update SmartVow contract address
-     */
     function setSmartVowContract(address _newContract) external onlyOwner {
+        address oldContract = smartVowContract;
         smartVowContract = _newContract;
+        emit SmartVowUpdated(oldContract, _newContract);
     }
 
-    /**
-     * @notice Withdraw contract balance
-     */
     function withdraw() external onlyOwner {
         (bool success, ) = owner.call{value: address(this).balance}("");
         require(success, "Withdraw failed");
     }
 
-    /**
-     * @notice Receive ETH
-     */
     receive() external payable {}
 }
