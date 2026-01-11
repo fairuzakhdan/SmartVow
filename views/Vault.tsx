@@ -69,7 +69,7 @@ const Vault: React.FC = () => {
   const [loadingAssets, setLoadingAssets] = useState(false);
   const [loadingBalance, setLoadingBalance] = useState(false);
   
-  // Modal states
+  // Modal state
   const [showDepositModal, setShowDepositModal] = useState(false);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [depositAmount, setDepositAmount] = useState('');
