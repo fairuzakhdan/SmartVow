@@ -2013,8 +2013,8 @@ const Dashboard: React.FC = () => {
                           </a>
                         )}
                         
-                        {/* Claim Button for Active Vows or Fully Signed Vows (not resolved/terminated) */}
-                        {(vow.isActive || (vow.partnerASigned && vow.partnerBSigned)) && 
+                        {/* Claim Button - ONLY for Active Vows (status = 2) */}
+                        {(vow.isActive || vow.status === 'active') && 
                          vow.status !== 'resolved' && vow.status !== 'terminated' && vow.status !== 'breached' && (
                           <button
                             onClick={() => {
