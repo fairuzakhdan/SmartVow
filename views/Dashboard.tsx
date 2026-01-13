@@ -2185,7 +2185,7 @@ const Dashboard: React.FC = () => {
             )}
           </div>
 
-          {/* Quick Actions */}
+          {/* Quick Actions*/}
           <div className="bg-gradient-to-br from-indigo-600 to-purple-600 p-6 rounded-2xl text-white">
             <h3 className="font-bold mb-4">Aksi Cepat</h3>
             <div className="space-y-3">
