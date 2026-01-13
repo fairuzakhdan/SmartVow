@@ -158,6 +158,70 @@ export const uploadMetadataToIPFS = async (metadata: {
 };
 
 /**
+ * Upload claim data to IPFS with searchable metadata
+ */
+export const uploadClaimToIPFS = async (claimData: Record<string, unknown>): Promise<string> => {
+  if (!PINATA_JWT) {
+    console.warn('Pinata JWT not set, using mock IPFS URI');
+    return `ipfs://bafkreic${Date.now().toString(36)}`;
+  }
+
+  const response = await fetch('https://api.pinata.cloud/pinning/pinJSONToIPFS', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${PINATA_JWT}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      pinataContent: claimData,
+      pinataMetadata: { 
+        name: `smartvow-claim-${claimData.vowId}`,
+        keyvalues: { vowId: String(claimData.vowId), type: 'claim' }
+      }
+    }),
+  });
+
+  const data = await response.json();
+  return `ipfs://${data.IpfsHash}`;
+};
+
+/**
+ * Fetch claim data from IPFS
+ */
+export const fetchClaimFromIPFS = async (ipfsUri: string): Promise<Record<string, unknown> | null> => {
+  try {
+    const url = ipfsUri.replace('ipfs://', 'https://gateway.pinata.cloud/ipfs/');
+    const response = await fetch(url);
+    return await response.json();
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Search claim by vowId from Pinata
+ */
+export const searchClaimByVowId = async (vowId: number): Promise<Record<string, unknown> | null> => {
+  if (!PINATA_JWT) return null;
+  
+  try {
+    const response = await fetch(
+      `https://api.pinata.cloud/data/pinList?metadata[name]=smartvow-claim-${vowId}&status=pinned`,
+      { headers: { 'Authorization': `Bearer ${PINATA_JWT}` } }
+    );
+    const data = await response.json();
+    
+    if (data.rows && data.rows.length > 0) {
+      const ipfsHash = data.rows[0].ipfs_pin_hash;
+      return await fetchClaimFromIPFS(`ipfs://${ipfsHash}`);
+    }
+  } catch (err) {
+    console.error('Search claim error:', err);
+  }
+  return null;
+};
+
+/**
  * Create and upload complete NFT metadata for marriage certificate
  */
 export const createCertificateMetadata = async (

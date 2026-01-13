@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useWeb3 } from '../contexts/Web3Context';
 import { certificateNFTService, assetNFTService } from '../services/web3Service';
+import { uploadToIPFS, uploadClaimToIPFS, searchClaimByVowId } from '../services/ipfsService';
 import { 
   CheckBadgeIcon, 
   ShieldCheckIcon,
@@ -110,6 +111,7 @@ const Dashboard: React.FC = () => {
   const [withdrawing, setWithdrawing] = useState(false);
   const [claimFileUrl, setClaimFileUrl] = useState<string | null>(null);
   const [selectedClaimDetail, setSelectedClaimDetail] = useState<any>(null);
+  const [claimDataCache, setClaimDataCache] = useState<Record<number, any>>({});
   const [depositAmount, setDepositAmount] = useState('');
   const [depositType, setDepositType] = useState<'personal' | 'shared'>('personal');
   const [depositing, setDepositing] = useState(false);
@@ -300,6 +302,18 @@ const Dashboard: React.FC = () => {
     } finally {
       setLoadingVaultBalance(false);
     }
+  };
+
+  // Load claim data from IPFS by searching Pinata
+  const loadClaimData = async (vowId: number): Promise<any> => {
+    if (claimDataCache[vowId]) return claimDataCache[vowId];
+    
+    const data = await searchClaimByVowId(vowId);
+    if (data) {
+      setClaimDataCache(prev => ({ ...prev, [vowId]: data }));
+      return data;
+    }
+    return null;
   };
 
   // Load vows from blockchain AND localStorage
@@ -1091,13 +1105,13 @@ const Dashboard: React.FC = () => {
         
         await submitInternalClaim(selectedVowForClaim, penaltyBasisPoints);
         
-        // Simpan data klaim ke localStorage untuk transparansi
+        // Simpan data klaim ke IPFS untuk persistensi permanen
         const claimData = {
           vowId: selectedVowForClaim,
           claimant: account,
           reason: claimReason,
-          date: claimEvidence, // tanggal kejadian
-          evidence: claimFileUrl || null, // URL file bukti jika ada
+          date: claimEvidence,
+          evidence: claimFileUrl || null,
           penaltyPercentage: penaltyPercentage,
           claimantAmount: expectedClaimantAmount,
           otherAmount: expectedOtherAmount,
@@ -1105,19 +1119,11 @@ const Dashboard: React.FC = () => {
           type: 'internal'
         };
         
-        // Simpan ke localStorage
-        const existingClaims = JSON.parse(localStorage.getItem('smartvow_claims') || '[]');
-        existingClaims.push(claimData);
-        localStorage.setItem('smartvow_claims', JSON.stringify(existingClaims));
+        // Upload ke IPFS
+        const claimIpfsUri = await uploadClaimToIPFS(claimData);
         
-        // Update agreement status di localStorage
-        const agreements = JSON.parse(localStorage.getItem('smartvow_agreements') || '[]');
-        const updatedAgreements = agreements.map((a: any) => 
-          a.vowId === selectedVowForClaim 
-            ? { ...a, status: 'resolved', claimData: claimData } 
-            : a
-        );
-        localStorage.setItem('smartvow_agreements', JSON.stringify(updatedAgreements));
+        // Cache claim data locally
+        setClaimDataCache(prev => ({ ...prev, [selectedVowForClaim]: claimData }));
         
         // Only show success if no error was thrown
         setShowClaimModal(false);
@@ -1138,7 +1144,7 @@ const Dashboard: React.FC = () => {
         console.log('Submitting AI claim for vow:', selectedVowForClaim);
         await submitAIClaim(selectedVowForClaim, claimReason, claimEvidence);
         
-        // Simpan data klaim ke localStorage untuk transparansi
+        // Simpan data klaim ke IPFS
         const claimData = {
           vowId: selectedVowForClaim,
           claimant: account,
@@ -1150,9 +1156,8 @@ const Dashboard: React.FC = () => {
           status: 'pending_verification'
         };
         
-        const existingClaims = JSON.parse(localStorage.getItem('smartvow_claims') || '[]');
-        existingClaims.push(claimData);
-        localStorage.setItem('smartvow_claims', JSON.stringify(existingClaims));
+        await uploadClaimToIPFS(claimData);
+        setClaimDataCache(prev => ({ ...prev, [selectedVowForClaim]: claimData }));
         
         setShowClaimModal(false);
         setSelectedVowForClaim(null);
@@ -2031,31 +2036,36 @@ const Dashboard: React.FC = () => {
                         <p className="text-[10px] text-slate-400 mt-2">{vow.conditions.length} klausul • Dibuat {new Date(vow.createdAt).toLocaleDateString('id-ID')}</p>
                       )}
                       
-                      {/* Detail Klaim untuk perjanjian yang sudah resolved - Compact View */}
+                      {/* Detail Klaim untuk perjanjian yang sudah resolved - Compact View*/}
                       {vow.status === 'resolved' && (() => {
-                        const claims = JSON.parse(localStorage.getItem('smartvow_claims') || '[]');
-                        const claimData = claims.find((c: any) => c.vowId === vow.vowId);
+                        const claimData = claimDataCache[vow.vowId];
                         
-                        if (claimData) {
+                        if (!claimData) {
+                          loadClaimData(vow.vowId);
                           return (
-                            <div className="mt-3 p-2 bg-purple-50 border border-purple-200 rounded-lg flex items-center justify-between">
-                              <div className="flex items-center gap-2">
-                                <span className="text-purple-600">📋</span>
-                                <div>
-                                  <p className="text-[10px] font-bold text-purple-700">Klaim oleh {shortenAddress(claimData.claimant)}</p>
-                                  <p className="text-[9px] text-purple-500">{new Date(claimData.claimedAt).toLocaleDateString('id-ID')} • {claimData.penaltyPercentage}% : {100 - claimData.penaltyPercentage}%</p>
-                                </div>
-                              </div>
-                              <button
-                                onClick={() => setSelectedClaimDetail(claimData)}
-                                className="px-2 py-1 bg-purple-100 text-purple-700 rounded-lg text-[9px] font-bold hover:bg-purple-200 transition-all"
-                              >
-                                Lihat Detail
-                              </button>
+                            <div className="mt-3 p-2 bg-purple-50 border border-purple-200 rounded-lg">
+                              <p className="text-[10px] text-purple-600">Memuat data klaim dari IPFS...</p>
                             </div>
                           );
                         }
-                        return null;
+                        
+                        return (
+                          <div className="mt-3 p-2 bg-purple-50 border border-purple-200 rounded-lg flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span className="text-purple-600">📋</span>
+                              <div>
+                                <p className="text-[10px] font-bold text-purple-700">Klaim oleh {shortenAddress(claimData.claimant)}</p>
+                                <p className="text-[9px] text-purple-500">{new Date(claimData.claimedAt).toLocaleDateString('id-ID')} • {claimData.penaltyPercentage}% : {100 - (claimData.penaltyPercentage || 0)}%</p>
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => setSelectedClaimDetail(claimData)}
+                              className="px-2 py-1 bg-purple-100 text-purple-700 rounded-lg text-[9px] font-bold hover:bg-purple-200 transition-all"
+                            >
+                              Lihat Detail
+                            </button>
+                          </div>
+                        );
                       })()}
                     </div>
                   );
@@ -2467,23 +2477,34 @@ const Dashboard: React.FC = () => {
                       id="claim-file"
                       className="hidden"
                       accept="image/*,.pdf,.doc,.docx"
-                      onChange={(e) => {
+                      onChange={async (e) => {
                         const file = e.target.files?.[0];
                         if (file) {
                           console.log('File selected:', file.name);
-                          // Convert to base64 untuk disimpan di localStorage
-                          const reader = new FileReader();
-                          reader.onloadend = () => {
-                            setClaimFileUrl(reader.result as string);
-                          };
-                          reader.readAsDataURL(file);
+                          setClaimFileUrl('uploading');
+                          try {
+                            const reader = new FileReader();
+                            reader.onloadend = async () => {
+                              const ipfsUrl = await uploadToIPFS(reader.result as string);
+                              setClaimFileUrl(ipfsUrl);
+                            };
+                            reader.readAsDataURL(file);
+                          } catch (err) {
+                            console.error('Upload error:', err);
+                            setClaimFileUrl(null);
+                          }
                         }
                       }}
                     />
-                    {claimFileUrl ? (
+                    {claimFileUrl === 'uploading' ? (
+                      <>
+                        <ArrowPathIcon className="h-8 w-8 text-indigo-500 mx-auto mb-2 animate-spin" />
+                        <p className="text-sm text-indigo-600 font-medium">Mengupload ke IPFS...</p>
+                      </>
+                    ) : claimFileUrl ? (
                       <>
                         <CheckCircleIcon className="h-8 w-8 text-emerald-500 mx-auto mb-2" />
-                        <p className="text-sm text-emerald-600 font-medium">File berhasil dipilih</p>
+                        <p className="text-sm text-emerald-600 font-medium">File berhasil diupload</p>
                         <button 
                           type="button"
                           onClick={(e) => {
@@ -2637,41 +2658,64 @@ const Dashboard: React.FC = () => {
                   <div>
                     <p className="text-xs font-bold text-slate-700 mb-2">📎 Bukti Pendukung</p>
                     <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
-                      {selectedClaimDetail.evidence.startsWith('data:image') ? (
-                        <img 
-                          src={selectedClaimDetail.evidence} 
-                          alt="Bukti klaim" 
-                          className="w-full rounded-lg border border-slate-200 cursor-pointer hover:opacity-90 transition-all"
-                          onClick={() => window.open(selectedClaimDetail.evidence, '_blank')}
-                        />
-                      ) : selectedClaimDetail.evidence.startsWith('data:application/pdf') ? (
-                        <div className="flex items-center gap-3 p-3 bg-white rounded-lg border border-slate-200">
-                          <div className="p-2 bg-rose-100 rounded-lg">
-                            <DocumentTextIcon className="h-6 w-6 text-rose-600" />
-                          </div>
-                          <div className="flex-1">
-                            <p className="text-sm font-bold text-slate-700">Dokumen PDF</p>
-                            <p className="text-xs text-slate-400">Klik untuk melihat</p>
-                          </div>
-                          <a 
-                            href={selectedClaimDetail.evidence} 
-                            target="_blank" 
-                            rel="noopener noreferrer"
-                            className="px-3 py-1.5 bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold hover:bg-indigo-200 transition-all"
-                          >
-                            Buka
-                          </a>
-                        </div>
-                      ) : (
-                        <a 
-                          href={selectedClaimDetail.evidence} 
-                          target="_blank" 
-                          rel="noopener noreferrer"
-                          className="flex items-center gap-2 text-indigo-600 font-bold hover:underline"
-                        >
-                          <DocumentTextIcon className="h-4 w-4" /> Lihat Dokumen
-                        </a>
-                      )}
+                      {(() => {
+                        const evidenceUrl = selectedClaimDetail.evidence.startsWith('ipfs://')
+                          ? selectedClaimDetail.evidence.replace('ipfs://', 'https://gateway.pinata.cloud/ipfs/')
+                          : selectedClaimDetail.evidence;
+                        
+                        if (selectedClaimDetail.evidence.startsWith('ipfs://') || evidenceUrl.includes('/ipfs/')) {
+                          return (
+                            <a 
+                              href={evidenceUrl} 
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              className="flex items-center gap-2 text-indigo-600 font-bold hover:underline"
+                            >
+                              <DocumentTextIcon className="h-4 w-4" /> Lihat Bukti di IPFS
+                            </a>
+                          );
+                        } else if (evidenceUrl.startsWith('data:image')) {
+                          return (
+                            <img 
+                              src={evidenceUrl} 
+                              alt="Bukti klaim" 
+                              className="w-full rounded-lg border border-slate-200 cursor-pointer hover:opacity-90 transition-all"
+                              onClick={() => window.open(evidenceUrl, '_blank')}
+                            />
+                          );
+                        } else if (evidenceUrl.startsWith('data:application/pdf')) {
+                          return (
+                            <div className="flex items-center gap-3 p-3 bg-white rounded-lg border border-slate-200">
+                              <div className="p-2 bg-rose-100 rounded-lg">
+                                <DocumentTextIcon className="h-6 w-6 text-rose-600" />
+                              </div>
+                              <div className="flex-1">
+                                <p className="text-sm font-bold text-slate-700">Dokumen PDF</p>
+                                <p className="text-xs text-slate-400">Klik untuk melihat</p>
+                              </div>
+                              <a 
+                                href={evidenceUrl} 
+                                target="_blank" 
+                                rel="noopener noreferrer"
+                                className="px-3 py-1.5 bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold hover:bg-indigo-200 transition-all"
+                              >
+                                Buka
+                              </a>
+                            </div>
+                          );
+                        } else {
+                          return (
+                            <a 
+                              href={evidenceUrl} 
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              className="flex items-center gap-2 text-indigo-600 font-bold hover:underline"
+                            >
+                              <DocumentTextIcon className="h-4 w-4" /> Lihat Dokumen
+                            </a>
+                          );
+                        }
+                      })()}
                     </div>
                   </div>
                 )}
