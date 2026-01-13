@@ -2081,7 +2081,7 @@ const Dashboard: React.FC = () => {
           </div>
         </div>
 
-        {/* Right Column */}
+        {/* Right Column*/}
         <div className="space-y-6">
           {/* Distribution */}
           <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
