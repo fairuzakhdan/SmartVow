@@ -258,7 +258,7 @@ const AssetCreator: React.FC = () => {
       {!isMinted ? (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-start">
           
-          {/* Wallet Connection Warning */}
+          {/* Wallet Connection Warning*/}
           {!isConnected && (
             <div className="lg:col-span-12 bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-center gap-3">
               <div className="p-2 bg-amber-100 rounded-xl">
