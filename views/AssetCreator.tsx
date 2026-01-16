@@ -165,7 +165,7 @@ const AssetCreator: React.FC = () => {
         selectedCategoryData?.name // Pass category to IPFS metadata
       );
       
-      // Convert ipfs:// to gateway URL for display
+      // Convert ipfs://to gateway URL for display
       const ipfsHash = imageURI.replace('ipfs://', '');
       const imageGatewayUrl = `https://gateway.pinata.cloud/ipfs/${ipfsHash}`;
       
