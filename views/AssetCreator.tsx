@@ -69,7 +69,7 @@ const AssetCreator: React.FC = () => {
       if (!account || !isConnected) return;
       
       try {
-        // Method 1: Get from SmartVow contracts
+        // Method 1: Get from SmartVow contract
         const vowIds = await getUserVows();
         if (vowIds.length > 0) {
           // Get the most recent vow
